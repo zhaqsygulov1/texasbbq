@@ -2,6 +2,7 @@
 import argparse
 import csv
 import math
+import random
 import re
 import threading
 import time
@@ -43,6 +44,17 @@ def get_session() -> requests.Session:
     return session
 
 
+def reset_session() -> None:
+    session = getattr(thread_local, "session", None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+    if hasattr(thread_local, "session"):
+        delattr(thread_local, "session")
+
+
 def build_params(code: str, page: int, count_record: int) -> Dict[str, str]:
     params = {
         "filter[name]": "",
@@ -72,18 +84,32 @@ def build_params(code: str, page: int, count_record: int) -> Dict[str, str]:
     return params
 
 
-def fetch_html(code: str, page: int, count_record: int, retries: int) -> str:
+def fetch_html(
+    code: str,
+    page: int,
+    count_record: int,
+    retries: int,
+    throttle_ms_min: int,
+    throttle_ms_max: int,
+) -> str:
     params = build_params(code=code, page=page, count_record=count_record)
     session = get_session()
     for attempt in range(retries):
         try:
+            if throttle_ms_max > 0:
+                delay_ms = random.randint(max(0, throttle_ms_min), max(throttle_ms_min, throttle_ms_max))
+                time.sleep(delay_ms / 1000.0)
             response = session.get(SEARCH_URL, params=params, timeout=45)
             response.raise_for_status()
             return response.text
         except requests.RequestException:
             if attempt == retries - 1:
                 raise
-            time.sleep(2 ** attempt)
+            reset_session()
+            session = get_session()
+            # Exponential backoff + jitter reduces transient 0-result responses.
+            sleep_sec = (2 ** attempt) + random.uniform(0.2, 0.9)
+            time.sleep(sleep_sec)
     raise RuntimeError("unreachable")
 
 
@@ -144,20 +170,51 @@ def fetch_rows_for_code(
     count_record: int,
     retries: int,
     max_pages: int,
+    empty_rechecks: int,
+    empty_recheck_pause_sec: float,
+    throttle_ms_min: int,
+    throttle_ms_max: int,
 ) -> Tuple[int, List[List[str]], int]:
-    html = fetch_html(code=code, page=1, count_record=count_record, retries=retries)
-    rows = parse_rows(html=html, code=code, product_name=product_name)
-    total = parse_total_count(html=html, fallback_rows=len(rows))
-    page_count = max(1, math.ceil(total / count_record)) if total else 1
-    page_count = min(page_count, max_pages)
+    def fetch_full_once() -> Tuple[List[List[str]], int]:
+        html = fetch_html(
+            code=code,
+            page=1,
+            count_record=count_record,
+            retries=retries,
+            throttle_ms_min=throttle_ms_min,
+            throttle_ms_max=throttle_ms_max,
+        )
+        rows = parse_rows(html=html, code=code, product_name=product_name)
+        total = parse_total_count(html=html, fallback_rows=len(rows))
+        page_count = max(1, math.ceil(total / count_record)) if total else 1
+        page_count = min(page_count, max_pages)
 
-    all_rows = list(rows)
-    for page in range(2, page_count + 1):
-        page_html = fetch_html(code=code, page=page, count_record=count_record, retries=retries)
-        page_rows = parse_rows(html=page_html, code=code, product_name=product_name)
-        if not page_rows:
-            break
-        all_rows.extend(page_rows)
+        all_rows = list(rows)
+        for page in range(2, page_count + 1):
+            page_html = fetch_html(
+                code=code,
+                page=page,
+                count_record=count_record,
+                retries=retries,
+                throttle_ms_min=throttle_ms_min,
+                throttle_ms_max=throttle_ms_max,
+            )
+            page_rows = parse_rows(html=page_html, code=code, product_name=product_name)
+            if not page_rows:
+                break
+            all_rows.extend(page_rows)
+        return all_rows, total
+
+    all_rows, total = fetch_full_once()
+    if not all_rows and total == 0:
+        for attempt in range(empty_rechecks):
+            time.sleep(empty_recheck_pause_sec + random.uniform(0.15, 0.8))
+            reset_session()
+            refreshed_rows, refreshed_total = fetch_full_once()
+            if refreshed_rows or refreshed_total > 0:
+                all_rows, total = refreshed_rows, refreshed_total
+                break
+
     return idx, all_rows, total
 
 
@@ -207,11 +264,15 @@ def main() -> None:
     parser.add_argument("--source-csv", default="source_codes.csv")
     parser.add_argument("--output-csv", default="lots_2025_filtered.csv")
     parser.add_argument("--output-tsv", default="lots_2025_filtered.tsv")
-    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=12)
     parser.add_argument("--count-record", type=int, default=2000)
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--retries", type=int, default=4)
     parser.add_argument("--max-codes", type=int, default=0)
+    parser.add_argument("--empty-rechecks", type=int, default=2)
+    parser.add_argument("--empty-recheck-pause-sec", type=float, default=1.8)
+    parser.add_argument("--throttle-ms-min", type=int, default=80)
+    parser.add_argument("--throttle-ms-max", type=int, default=220)
     args = parser.parse_args()
 
     source_csv = Path(args.source_csv).resolve()
@@ -241,6 +302,10 @@ def main() -> None:
                 args.count_record,
                 args.retries,
                 args.max_pages,
+                args.empty_rechecks,
+                args.empty_recheck_pause_sec,
+                args.throttle_ms_min,
+                args.throttle_ms_max,
             )
             for idx, (code, name) in enumerate(codes)
         ]
