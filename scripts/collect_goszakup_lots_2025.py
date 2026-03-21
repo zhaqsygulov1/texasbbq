@@ -35,6 +35,8 @@ OUTPUT_HEADERS = [
 
 TOTAL_RE = re.compile(r"Показано c\s*(\d+)\s*по\s*(\d+)\s*из\s*([\d\s]+)\s*записей", re.I)
 LOT_NUM_RE = re.compile(r"^(\d+-\S+)")
+TRU_CODE_RE = re.compile(r"^\d{6}\.\d{3}\.\d{6}$")
+TRU_CODE_IN_TEXT_RE = re.compile(r"\b\d{6}\.\d{3}\.\d{6}\b")
 
 
 @dataclass
@@ -81,7 +83,28 @@ def request_text(session: requests.Session, url: str, params: Dict[str, str], ti
     raise RuntimeError(f"Request failed after retries: {url} params={params}") from last_error
 
 
-def fetch_tru_items(session: requests.Session, source_sheet_id: str) -> List[TruItem]:
+def normalize_tru_code(raw_code: str, name: str, strict_code_format: bool) -> Tuple[Optional[str], str]:
+    code = raw_code.strip()
+    if TRU_CODE_RE.fullmatch(code):
+        return code, "ok"
+
+    # Some rows in the source sheet contain shortened/broken code in column A,
+    # while the full code still exists in the name text.
+    fallback_match = TRU_CODE_IN_TEXT_RE.search(f"{raw_code} {name}")
+    if fallback_match:
+        return fallback_match.group(0), "from_name_fallback"
+
+    if strict_code_format:
+        return None, "invalid_format_skipped"
+    return code, "kept_raw_non_strict"
+
+
+def fetch_tru_items(
+    session: requests.Session,
+    source_sheet_id: str,
+    strict_code_format: bool,
+    invalid_codes_log: str,
+) -> List[TruItem]:
     url = SOURCE_CSV_URL_TEMPLATE.format(sheet_id=source_sheet_id)
     text = request_text(session, url, params={})
     reader = csv.reader(io.StringIO(text))
@@ -90,14 +113,34 @@ def fetch_tru_items(session: requests.Session, source_sheet_id: str) -> List[Tru
         raise RuntimeError("Source sheet is empty")
 
     items: List[TruItem] = []
+    invalid_entries: List[List[str]] = []
+    fallback_fixed = 0
     for row in rows[1:]:
         if not row:
             continue
-        code = (row[0] if len(row) > 0 else "").strip()
+        raw_code = (row[0] if len(row) > 0 else "").strip()
         name = (row[1] if len(row) > 1 else "").strip()
-        if not code:
+        if not raw_code:
             continue
-        items.append(TruItem(code=code, name=name))
+        normalized_code, reason = normalize_tru_code(raw_code, name, strict_code_format)
+        if normalized_code is None:
+            invalid_entries.append([raw_code, name, reason])
+            continue
+        if reason == "from_name_fallback":
+            fallback_fixed += 1
+        items.append(TruItem(code=normalized_code, name=name))
+
+    os.makedirs(os.path.dirname(invalid_codes_log), exist_ok=True)
+    with open(invalid_codes_log, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["raw_code", "name", "reason"])
+        writer.writerows(invalid_entries)
+
+    print(
+        f"[INFO] Source normalization: fallback_fixed={fallback_fixed}, invalid_skipped={len(invalid_entries)}",
+        flush=True,
+    )
+    print(f"[INFO] Invalid codes log: {invalid_codes_log}", flush=True)
     return items
 
 
@@ -251,7 +294,14 @@ def run(args: argparse.Namespace) -> int:
     session = build_session()
 
     print("[INFO] Loading source TРУ table...", flush=True)
-    tru_items = unique_tru_items(fetch_tru_items(session, args.source_sheet_id))
+    tru_items = unique_tru_items(
+        fetch_tru_items(
+            session=session,
+            source_sheet_id=args.source_sheet_id,
+            strict_code_format=args.strict_code_format,
+            invalid_codes_log=args.invalid_codes_log,
+        )
+    )
     print(f"[INFO] Loaded {len(tru_items)} unique TРУ codes", flush=True)
 
     if args.max_codes > 0:
@@ -351,6 +401,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-codes", type=int, default=0)
     parser.add_argument("--page-delay", type=float, default=0.35)
     parser.add_argument("--code-delay", type=float, default=0.35)
+    parser.add_argument("--strict-code-format", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--invalid-codes-log", default="/workspace/outputs/skipped_invalid_codes.csv")
     return parser.parse_args()
 
 
