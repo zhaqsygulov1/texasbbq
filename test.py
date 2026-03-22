@@ -301,10 +301,12 @@ def append_rows_to_google_sheet(rows: List[List[str]], start_row: int, chunk_siz
         page.goto(TARGET_EDIT_URL, wait_until="domcontentloaded", timeout=180000)
         page.wait_for_timeout(18000)
 
-        written = 0
-        while written < len(rows):
-            chunk = rows[written : written + chunk_size]
-            target_row = start_row + written
+        cursor = 0
+        while cursor < len(rows):
+            chunk_start = 0 if cursor == 0 else cursor - 1
+            chunk_end = min(len(rows), chunk_start + chunk_size)
+            chunk = rows[chunk_start:chunk_end]
+            target_row = start_row + chunk_start
             page.fill("#t-name-box", f"A{target_row}")
             page.keyboard.press("Enter")
             page.wait_for_timeout(700)
@@ -327,9 +329,9 @@ def append_rows_to_google_sheet(rows: List[List[str]], start_row: int, chunk_siz
                 )
             page.keyboard.press("Control+v")
             page.wait_for_timeout(2500)
-            written += len(chunk)
+            cursor = chunk_end
             print(
-                f"[sheet] Вставлено {written}/{len(rows)} строк "
+                f"[sheet] Вставлено до payload-индекса {cursor}/{len(rows)} "
                 f"(последняя строка A{target_row + len(chunk) - 1})"
             )
 
