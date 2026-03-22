@@ -223,7 +223,11 @@ def get_total_and_page_size(html_text: str) -> Tuple[int, int]:
 
 
 def fetch_page_html(
-    session: requests.Session, code: str, page: int, timeout: int = 40
+    session: requests.Session,
+    code: str,
+    page: int,
+    timeout: int = 40,
+    month: str | None = None,
 ) -> str:
     params = {
         "filter[enstru]": code,
@@ -233,6 +237,8 @@ def fetch_page_html(
         "count_record": str(COUNT_RECORD),
         "smb": "",
     }
+    if month is not None:
+        params["filter[month]"] = month
     if page > 1:
         params["page"] = str(page)
 
@@ -264,26 +270,76 @@ def scrape_code(code: str, product_name: str) -> CodeResult:
     if total == 0:
         return CodeResult(code=code, rows=[], total_reported=0, pages=0)
 
-    pages = max(1, math.ceil(total / page_size))
-    all_rows = parse_lot_rows_from_html(first_html, code=code, product_name=product_name)
+    def scrape_pages(
+        first_page_html: str, total_records: int, one_page_size: int, month_value: str | None
+    ) -> Tuple[List[List[str]], int, str]:
+        local_rows = parse_lot_rows_from_html(
+            first_page_html, code=code, product_name=product_name
+        )
+        local_pages = max(1, math.ceil(total_records / one_page_size))
+        for page in range(2, local_pages + 1):
+            try:
+                html_page = fetch_page_html(
+                    session, code=code, page=page, month=month_value
+                )
+                local_rows.extend(
+                    parse_lot_rows_from_html(html_page, code=code, product_name=product_name)
+                )
+            except Exception as exc:  # noqa: BLE001
+                return (
+                    local_rows,
+                    local_pages,
+                    f"Частичная ошибка на странице {page} (month={month_value}): {exc}",
+                )
+            time.sleep(random.uniform(0.05, 0.2))
+        return local_rows, local_pages, ""
 
-    for page in range(2, pages + 1):
-        try:
-            html_page = fetch_page_html(session, code=code, page=page)
-            all_rows.extend(
-                parse_lot_rows_from_html(html_page, code=code, product_name=product_name)
+    # На портале выдача по поиску обычно ограничена 10 000 строками.
+    # Для таких кодов разбиваем выгрузку по месяцам, чтобы забрать полный объем.
+    if total == 10000:
+        month_rows: List[List[str]] = []
+        month_pages = 0
+        month_total_sum = 0
+        month_error = ""
+        for month in range(1, 13):
+            try:
+                month_first_html = fetch_page_html(
+                    session, code=code, page=1, month=str(month)
+                )
+            except Exception as exc:  # noqa: BLE001
+                month_error = f"Ошибка month={month}: {exc}"
+                continue
+            month_total, month_page_size = get_total_and_page_size(month_first_html)
+            if month_total == 0:
+                continue
+            month_total_sum += month_total
+            rows_for_month, pages_for_month, err_for_month = scrape_pages(
+                month_first_html, month_total, month_page_size, str(month)
             )
-        except Exception as exc:  # noqa: BLE001
-            return CodeResult(
-                code=code,
-                rows=all_rows,
-                total_reported=total,
-                pages=pages,
-                error=f"Частичная ошибка на странице {page}: {exc}",
-            )
-        time.sleep(random.uniform(0.05, 0.2))
+            month_rows.extend(rows_for_month)
+            month_pages += pages_for_month
+            if err_for_month and not month_error:
+                month_error = err_for_month
 
-    return CodeResult(code=code, rows=all_rows, total_reported=total, pages=pages)
+        deduped: List[List[str]] = []
+        seen_month_keys: Set[Tuple[str, str]] = set()
+        for row in month_rows:
+            key = (row[0], row[1])
+            if key in seen_month_keys:
+                continue
+            seen_month_keys.add(key)
+            deduped.append(row)
+
+        return CodeResult(
+            code=code,
+            rows=deduped,
+            total_reported=month_total_sum if month_total_sum else total,
+            pages=month_pages,
+            error=month_error,
+        )
+
+    all_rows, pages, err = scrape_pages(first_html, total, page_size, None)
+    return CodeResult(code=code, rows=all_rows, total_reported=total, pages=pages, error=err)
 
 
 def rows_to_tsv(rows: Sequence[Sequence[str]]) -> str:
