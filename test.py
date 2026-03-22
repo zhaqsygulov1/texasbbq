@@ -404,7 +404,7 @@ def main() -> int:
     limit = max(0, args.max_codes)
     source_batch = source_codes[offset : offset + limit]
     already_present = sum(1 for code in source_batch if code in existing_codes)
-    codes_to_process = [code for code in source_batch if code not in existing_codes]
+    codes_to_process = source_batch
     print(
         f"[run] Обрабатываем {len(codes_to_process)} кодов "
         f"(workers={args.workers}, dry_run={args.dry_run}, offset={offset}, "
