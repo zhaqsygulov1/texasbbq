@@ -19,6 +19,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
@@ -152,11 +153,18 @@ def parse_rows_for_code(soup: BeautifulSoup, code: str, product_name: str) -> li
 
     rows: list[list[str]] = []
     for tr in tbody.find_all("tr", recursive=False):
-        tds = tr.find_all("td", recursive=False)
+        # Result table markup is malformed (missing some closing </td>),
+        # so nested <td> can appear when parsed; recursive search is required.
+        tds = tr.find_all("td")
         if len(tds) < 7:
             continue
 
-        lot_number = extract_text(tds[0])
+        lot_number_candidates = tds[0].find_all("strong")
+        lot_number = (
+            extract_text(lot_number_candidates[0])
+            if lot_number_candidates
+            else extract_text(tds[0])
+        )
         announcement = extract_text(tds[1].find("strong")) or extract_text(tds[1])
 
         lot_name = extract_text(tds[2].find("strong"))
@@ -194,11 +202,130 @@ def parse_rows_for_code(soup: BeautifulSoup, code: str, product_name: str) -> li
     return rows
 
 
+def format_date(value: date) -> str:
+    return value.strftime("%d.%m.%Y")
+
+
+def load_status_values(year: int, count_record: int) -> list[str]:
+    html = fetch_html(
+        {
+            "filter[year]": str(year),
+            "count_record": str(count_record),
+            "page": "1",
+            "smb": "",
+        }
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    statuses: list[str] = []
+    for option in soup.select('select[name="filter[status][]"] option[value]'):
+        value = normalize_text(option.get("value", ""))
+        if value:
+            statuses.append(value)
+    return statuses
+
+
+def collect_range_recursive(
+    tru: TruCode,
+    base_params: dict[str, str],
+    count_record: int,
+    status_values: list[str],
+    start_date: date,
+    end_date: date,
+    status_filter: str | None = None,
+    depth: int = 0,
+) -> list[list[str]]:
+    params = dict(base_params)
+    params["filter[start_date_from]"] = format_date(start_date)
+    params["filter[start_date_to]"] = format_date(end_date)
+    params["page"] = "1"
+    if status_filter:
+        params["filter[status][]"] = status_filter
+
+    html = fetch_html(params=params)
+    soup = BeautifulSoup(html, "html.parser")
+    page1_rows = parse_rows_for_code(soup=soup, code=tru.code, product_name=tru.name)
+    total_pages = parse_total_pages(soup)
+    interval_days = (end_date - start_date).days + 1
+
+    prefetched_pages: dict[int, list[list[str]]] = {1: page1_rows}
+    likely_capped = False
+    if total_pages >= 5 and len(page1_rows) >= count_record:
+        last_params = dict(params)
+        last_params["page"] = str(total_pages)
+        last_html = fetch_html(params=last_params)
+        last_soup = BeautifulSoup(last_html, "html.parser")
+        last_rows = parse_rows_for_code(last_soup, code=tru.code, product_name=tru.name)
+        prefetched_pages[total_pages] = last_rows
+        likely_capped = len(last_rows) >= count_record
+    if likely_capped and interval_days > 1:
+        mid = start_date + timedelta(days=(interval_days // 2) - 1)
+        left_rows = collect_range_recursive(
+            tru=tru,
+            base_params=base_params,
+            count_record=count_record,
+            status_values=status_values,
+            start_date=start_date,
+            end_date=mid,
+            status_filter=status_filter,
+            depth=depth + 1,
+        )
+        right_rows = collect_range_recursive(
+            tru=tru,
+            base_params=base_params,
+            count_record=count_record,
+            status_values=status_values,
+            start_date=mid + timedelta(days=1),
+            end_date=end_date,
+            status_filter=status_filter,
+            depth=depth + 1,
+        )
+        return left_rows + right_rows
+
+    if likely_capped and interval_days == 1 and not status_filter:
+        rows: list[list[str]] = []
+        for status in status_values:
+            rows.extend(
+                collect_range_recursive(
+                    tru=tru,
+                    base_params=base_params,
+                    count_record=count_record,
+                    status_values=status_values,
+                    start_date=start_date,
+                    end_date=end_date,
+                    status_filter=status,
+                    depth=depth + 1,
+                )
+            )
+        return rows
+
+    if likely_capped and interval_days == 1 and status_filter:
+        print(
+            "WARNING: capped daily interval for "
+            f"{tru.code} {format_date(start_date)} status={status_filter}"
+        )
+
+    rows = list(prefetched_pages[1])
+    if total_pages > 1:
+        for page in range(2, total_pages + 1):
+            if page in prefetched_pages:
+                rows.extend(prefetched_pages[page])
+            else:
+                page_params = dict(params)
+                page_params["page"] = str(page)
+                page_html = fetch_html(params=page_params)
+                page_soup = BeautifulSoup(page_html, "html.parser")
+                rows.extend(
+                    parse_rows_for_code(page_soup, code=tru.code, product_name=tru.name)
+                )
+                time.sleep(random.uniform(0.03, 0.12))
+    return rows
+
+
 def collect_for_code(
     tru: TruCode,
     year: int,
     count_record: int,
-    status_filter: list[str] | None = None,
+    status_values: list[str],
     amount_from: str | None = None,
     amount_to: str | None = None,
 ) -> tuple[str, list[list[str]]]:
@@ -213,11 +340,6 @@ def collect_for_code(
     if amount_to:
         base_params["filter[amount_to]"] = amount_to
 
-    if status_filter:
-        # requests can't have duplicate keys in dict, so we encode manually
-        # by sending one of the statuses here and expanding query as tuples below.
-        pass
-
     all_rows: list[list[str]] = []
     seen_keys: set[tuple[str, str]] = set()
 
@@ -229,25 +351,15 @@ def collect_for_code(
             seen_keys.add(key)
             all_rows.append(row)
 
-    params_page1 = dict(base_params)
-    params_page1["page"] = "1"
-
-    html = fetch_html(params=params_page1)
-    soup = BeautifulSoup(html, "html.parser")
-    merge_rows(parse_rows_for_code(soup=soup, code=tru.code, product_name=tru.name))
-    total_pages = parse_total_pages(soup)
-
-    if total_pages > 1:
-        for page in range(2, total_pages + 1):
-            params = dict(base_params)
-            params["page"] = str(page)
-            page_html = fetch_html(params=params)
-            page_soup = BeautifulSoup(page_html, "html.parser")
-            merge_rows(
-                parse_rows_for_code(page_soup, code=tru.code, product_name=tru.name)
-            )
-            # small jitter keeps request pattern less bursty
-            time.sleep(random.uniform(0.03, 0.12))
+    collected_rows = collect_range_recursive(
+        tru=tru,
+        base_params=base_params,
+        count_record=count_record,
+        status_values=status_values,
+        start_date=date(year, 1, 1),
+        end_date=date(year, 12, 31),
+    )
+    merge_rows(collected_rows)
 
     return tru.code, all_rows
 
@@ -334,6 +446,8 @@ def main() -> int:
         f"Collecting lots for year {args.year} with workers={args.workers}, "
         f"count_record={args.count_record}"
     )
+    status_values = load_status_values(year=args.year, count_record=args.count_record)
+    print(f"Loaded status filters: {len(status_values)}")
 
     results_by_code: dict[str, list[list[str]]] = {}
     total = len(codes)
@@ -346,6 +460,7 @@ def main() -> int:
                 tru,
                 args.year,
                 args.count_record,
+                status_values,
             ): tru
             for tru in codes
         }
