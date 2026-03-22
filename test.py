@@ -381,10 +381,13 @@ def main() -> int:
 
     offset = max(0, args.offset)
     limit = max(0, args.max_codes)
-    codes_to_process = missing_codes[offset : offset + limit]
+    source_batch = source_codes[offset : offset + limit]
+    already_present = sum(1 for code in source_batch if code in existing_codes)
+    codes_to_process = [code for code in source_batch if code not in existing_codes]
     print(
         f"[run] Обрабатываем {len(codes_to_process)} кодов "
-        f"(workers={args.workers}, dry_run={args.dry_run}, offset={offset})"
+        f"(workers={args.workers}, dry_run={args.dry_run}, offset={offset}, "
+        f"already_present_in_batch={already_present})"
     )
 
     all_new_rows: List[List[str]] = []
