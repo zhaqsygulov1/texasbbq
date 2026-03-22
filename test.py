@@ -293,7 +293,11 @@ def rows_to_tsv(rows: Sequence[Sequence[str]]) -> str:
 def append_rows_to_google_sheet(rows: List[List[str]], start_row: int, chunk_size: int) -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1700, "height": 1000})
+        context = browser.new_context(
+            viewport={"width": 1700, "height": 1000},
+            permissions=["clipboard-read", "clipboard-write"],
+        )
+        page = context.new_page()
         page.goto(TARGET_EDIT_URL, wait_until="domcontentloaded", timeout=180000)
         page.wait_for_timeout(18000)
 
@@ -304,9 +308,25 @@ def append_rows_to_google_sheet(rows: List[List[str]], start_row: int, chunk_siz
             page.fill("#t-name-box", f"A{target_row}")
             page.keyboard.press("Enter")
             page.wait_for_timeout(700)
-            page.mouse.click(430, 250)
-            page.keyboard.insert_text(rows_to_tsv(chunk))
-            page.wait_for_timeout(2200)
+            tsv_payload = rows_to_tsv(chunk)
+            clipboard_result = page.evaluate(
+                """async (payload) => {
+                    try {
+                        await navigator.clipboard.writeText(payload);
+                        return "ok";
+                    } catch (err) {
+                        return `error:${err}`;
+                    }
+                }""",
+                tsv_payload,
+            )
+            if clipboard_result != "ok":
+                raise RuntimeError(
+                    f"Ошибка записи в буфер обмена перед вставкой строки {target_row}: "
+                    f"{clipboard_result}"
+                )
+            page.keyboard.press("Control+v")
+            page.wait_for_timeout(2500)
             written += len(chunk)
             print(
                 f"[sheet] Вставлено {written}/{len(rows)} строк "
@@ -315,6 +335,7 @@ def append_rows_to_google_sheet(rows: List[List[str]], start_row: int, chunk_siz
 
         # Небольшая пауза, чтобы autosave успел завершиться перед закрытием браузера.
         page.wait_for_timeout(6000)
+        context.close()
         browser.close()
 
 
