@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+# Generated run artifacts
+lots_2025_full.csv
+lots_2025_full_sample.csv
+lots_2025_new_rows_sample.csv
+lots_2025_progress.json
+lots_2025_progress_sample.json
+lots_2025_errors.csv
+lots_2025_errors_sample.csv
+lots_2025_run.log
