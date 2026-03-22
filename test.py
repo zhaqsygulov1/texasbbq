@@ -429,6 +429,15 @@ def parse_args() -> argparse.Namespace:
         help="Размер чанка вставки в Google Sheet.",
     )
     parser.add_argument(
+        "--codes",
+        type=str,
+        default="",
+        help=(
+            "Явный список кодов ТРУ через запятую. "
+            "Если указан, параметры offset/max-codes игнорируются."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Только собрать и показать статистику, без записи в целевую таблицу.",
@@ -458,11 +467,17 @@ def main() -> int:
         print("[done] Все коды уже присутствуют в целевой таблице.")
         return 0
 
-    offset = max(0, args.offset)
-    limit = max(0, args.max_codes)
-    source_batch = source_codes[offset : offset + limit]
-    already_present = sum(1 for code in source_batch if code in existing_codes)
-    codes_to_process = source_batch
+    manual_codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+    if manual_codes:
+        codes_to_process = manual_codes
+        already_present = sum(1 for code in codes_to_process if code in existing_codes)
+        offset = -1
+    else:
+        offset = max(0, args.offset)
+        limit = max(0, args.max_codes)
+        source_batch = source_codes[offset : offset + limit]
+        already_present = sum(1 for code in source_batch if code in existing_codes)
+        codes_to_process = source_batch
     print(
         f"[run] Обрабатываем {len(codes_to_process)} кодов "
         f"(workers={args.workers}, dry_run={args.dry_run}, offset={offset}, "
