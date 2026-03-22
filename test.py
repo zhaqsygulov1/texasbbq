@@ -465,9 +465,23 @@ def main() -> int:
         print("[done] Новых строк для записи нет.")
         return 0
 
-    start_row = target_data_rows + 2  # +1 header, +1 next empty row
-    print(f"[sheet] Старт записи с строки A{start_row} (всего {len(all_new_rows)} строк)")
-    append_rows_to_google_sheet(all_new_rows, start_row=start_row, chunk_size=args.chunk_size)
+    if target_data_rows == 0:
+        start_row = 2
+        payload_rows = all_new_rows
+    else:
+        # Пишем с последней существующей строки: первая строка payload повторяет якорную
+        # строку один-в-один, а все последующие добавляются как новые.
+        start_row = target_data_rows + 1
+        anchor_row = target_rows[-1][: len(TARGET_HEADERS)]
+        if len(anchor_row) < len(TARGET_HEADERS):
+            anchor_row = anchor_row + [""] * (len(TARGET_HEADERS) - len(anchor_row))
+        payload_rows = [anchor_row] + all_new_rows
+
+    print(
+        f"[sheet] Старт записи с строки A{start_row} "
+        f"(payload={len(payload_rows)} строк, новых={len(all_new_rows)})"
+    )
+    append_rows_to_google_sheet(payload_rows, start_row=start_row, chunk_size=args.chunk_size)
 
     # Проверка факта добавления строк.
     updated_rows = download_csv_rows(TARGET_CSV_URL)
