@@ -332,6 +332,12 @@ def parse_args() -> argparse.Namespace:
         help="Максимум обрабатываемых отсутствующих кодов за запуск.",
     )
     parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Смещение в списке отсутствующих кодов перед обработкой.",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=4,
@@ -373,10 +379,12 @@ def main() -> int:
         print("[done] Все коды уже присутствуют в целевой таблице.")
         return 0
 
-    codes_to_process = missing_codes[: max(0, args.max_codes)]
+    offset = max(0, args.offset)
+    limit = max(0, args.max_codes)
+    codes_to_process = missing_codes[offset : offset + limit]
     print(
         f"[run] Обрабатываем {len(codes_to_process)} кодов "
-        f"(workers={args.workers}, dry_run={args.dry_run})"
+        f"(workers={args.workers}, dry_run={args.dry_run}, offset={offset})"
     )
 
     all_new_rows: List[List[str]] = []
