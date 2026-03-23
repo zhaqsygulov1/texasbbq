@@ -180,6 +180,52 @@ def fetch_page(
     return response.text
 
 
+def fetch_parsed_rows_with_retry(
+    session: requests.Session,
+    tru_code: TruCode,
+    year: int,
+    amount_from: int | None,
+    status: str | None,
+    count_record: int,
+    page: int,
+    expected_non_empty: bool,
+    attempts: int = 6,
+) -> Tuple[List[Dict[str, str]], int]:
+    last_error = "unknown parser error"
+    for attempt in range(1, attempts + 1):
+        try:
+            html = fetch_page(
+                session=session,
+                tru_code=tru_code.code,
+                year=year,
+                amount_from=amount_from,
+                status=status,
+                count_record=count_record,
+                page=page,
+            )
+            soup = BeautifulSoup(html, "lxml")
+            table = find_lot_table(soup)
+            if table is None:
+                raise RuntimeError("lot table not found")
+
+            rows = parse_lot_rows(table, tru_code)
+            total_records = extract_total_records(soup.get_text(" ", strip=True))
+
+            # For pages after first one, empty rows usually mean a transient bad response.
+            if expected_non_empty and not rows:
+                raise RuntimeError("empty rows on non-empty expected page")
+
+            return rows, total_records
+        except Exception as exc:  # pragma: no cover - network/page instability handling
+            last_error = str(exc)
+            if attempt < attempts:
+                time.sleep(min(0.5 * attempt, 3.0))
+
+    raise RuntimeError(
+        f"Unable to parse code={tru_code.code} page={page} after {attempts} attempts: {last_error}"
+    )
+
+
 def collect_for_code(
     tru_code: TruCode,
     year: int,
@@ -189,47 +235,37 @@ def collect_for_code(
     max_pages_per_code: int | None,
 ) -> Tuple[List[Dict[str, str]], int]:
     session = build_session()
-    page1 = fetch_page(
+    first_rows, total_records = fetch_parsed_rows_with_retry(
         session=session,
-        tru_code=tru_code.code,
+        tru_code=tru_code,
         year=year,
         amount_from=amount_from,
         status=status,
         count_record=count_record,
         page=1,
+        expected_non_empty=False,
     )
-    soup = BeautifulSoup(page1, "lxml")
-    table = find_lot_table(soup)
-    if table is None:
-        return [], 0
-
-    total_records = extract_total_records(soup.get_text(" ", strip=True))
     if total_records == 0:
-        # If parser misses the "Показано..." text, still keep rows from first page.
-        first_page_rows = parse_lot_rows(table, tru_code)
-        return first_page_rows, len(first_page_rows)
+        return first_rows, len(first_rows)
 
     total_pages = max(1, math.ceil(total_records / count_record))
     if max_pages_per_code is not None:
         total_pages = min(total_pages, max_pages_per_code)
 
-    rows = parse_lot_rows(table, tru_code)
+    rows = list(first_rows)
 
     for page in range(2, total_pages + 1):
-        html = fetch_page(
+        page_rows, _ = fetch_parsed_rows_with_retry(
             session=session,
-            tru_code=tru_code.code,
+            tru_code=tru_code,
             year=year,
             amount_from=amount_from,
             status=status,
             count_record=count_record,
             page=page,
+            expected_non_empty=True,
         )
-        soup_next = BeautifulSoup(html, "lxml")
-        table_next = find_lot_table(soup_next)
-        if table_next is None:
-            continue
-        rows.extend(parse_lot_rows(table_next, tru_code))
+        rows.extend(page_rows)
         # Gentle delay to reduce chance of being rate-limited.
         time.sleep(0.12)
 
@@ -255,6 +291,13 @@ def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in OUTPUT_COLUMNS})
+
+
+def write_failed_codes(path: Path, failed_codes: List[TruCode]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for code in failed_codes:
+            f.write(f"{code.code}\t{code.name}\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -287,6 +330,7 @@ def main() -> None:
         tru_codes = tru_codes[: args.max_codes]
 
     all_rows: List[Dict[str, str]] = []
+    failed_codes: List[TruCode] = []
     total = len(tru_codes)
     started_at = time.time()
     print(f"Loaded TRU codes: {total}")
@@ -311,12 +355,38 @@ def main() -> None:
                 rows, total_records = future.result()
             except Exception as exc:  # pragma: no cover
                 print(f"[{idx}/{total}] {code.code} FAILED: {exc}")
+                failed_codes.append(code)
                 continue
             all_rows.extend(rows)
             print(
                 f"[{idx}/{total}] {code.code}: parsed={len(rows)} listed_total={total_records} "
                 f"aggregate_rows={len(all_rows)}"
             )
+
+    if failed_codes:
+        print()
+        print(f"Retrying failed codes sequentially: {len(failed_codes)}")
+        retry_failed: List[TruCode] = []
+        for idx, code in enumerate(failed_codes, start=1):
+            try:
+                rows, total_records = collect_for_code(
+                    tru_code=code,
+                    year=args.year,
+                    amount_from=amount_from,
+                    status=status,
+                    count_record=args.count_record,
+                    max_pages_per_code=max_pages_per_code,
+                )
+                all_rows.extend(rows)
+                print(
+                    f"[retry {idx}/{len(failed_codes)}] {code.code}: parsed={len(rows)} "
+                    f"listed_total={total_records} aggregate_rows={len(all_rows)}"
+                )
+            except Exception as exc:  # pragma: no cover
+                print(f"[retry {idx}/{len(failed_codes)}] {code.code} FAILED: {exc}")
+                retry_failed.append(code)
+
+        failed_codes = retry_failed
 
     unique = unique_rows(all_rows)
     unique.sort(key=lambda r: (r["Код ТРУ"], r["№ лота"]))
@@ -328,6 +398,12 @@ def main() -> None:
     print(f"Done in {elapsed:.1f}s")
     print(f"Rows parsed: {len(all_rows)}")
     print(f"Rows unique: {len(unique)}")
+    if failed_codes:
+        failed_path = output_path.parent / "failed_codes.txt"
+        write_failed_codes(failed_path, failed_codes)
+        print(f"Failed codes: {len(failed_codes)} (saved to {failed_path.resolve()})")
+    else:
+        print("Failed codes: 0")
     print(f"Output: {output_path.resolve()}")
 
 
