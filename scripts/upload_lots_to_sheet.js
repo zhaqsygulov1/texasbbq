@@ -8,6 +8,7 @@ const SPREADSHEET_ID = "13U7JlDKWQlK64mzg4P9AXLs_QXQwkQvoC82x-9zHcrU";
 const TARGET_GID = "2088501793";
 const INPUT_JSONL = path.join(__dirname, "..", "data", "lots_2025.jsonl");
 const CHUNK_COMMANDS = 600;
+const FLUSH_DELAY_MS = 1500;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -203,6 +204,7 @@ async function main() {
         rev += 1;
       }
       commandsBatch = [];
+      await sleep(FLUSH_DELAY_MS);
     };
 
     for (let rowIndex = startRow; rowIndex < endRowExclusive; rowIndex++) {
