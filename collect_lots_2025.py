@@ -403,11 +403,32 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Env var name containing service account JSON payload",
     )
     parser.add_argument("--upload-chunk-rows", type=int, default=1000, help="Rows per write request during Google Sheets upload")
+    parser.add_argument(
+        "--upload-existing-csv-only",
+        action="store_true",
+        help="Skip scraping and upload already prepared --output CSV to target Google Sheet",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> int:
     args = parse_args()
+    target_sheet_id = args.target_sheet_id.strip()
+
+    if args.upload_existing_csv_only:
+        if not target_sheet_id:
+            raise RuntimeError("--upload-existing-csv-only requires --target-sheet-id")
+        if not os.path.exists(args.output):
+            raise RuntimeError(f"CSV file does not exist: {args.output}")
+        upload_csv_to_google_sheet(
+            csv_path=args.output,
+            spreadsheet_id=target_sheet_id,
+            worksheet_name=args.target_worksheet_name.strip() or None,
+            service_account_file=args.service_account_file.strip() or None,
+            service_account_json_env=args.service_account_json_env.strip(),
+            chunk_rows=max(1, args.upload_chunk_rows),
+        )
+        return 0
 
     code_rows = read_codes_from_source_sheet(args.source_sheet_id)
     if args.limit_codes > 0:
@@ -430,7 +451,6 @@ def main() -> int:
     log(f"Codes successful: {ok_codes}")
     log(f"Codes failed: {bad_codes}")
 
-    target_sheet_id = args.target_sheet_id.strip()
     if target_sheet_id:
         upload_csv_to_google_sheet(
             csv_path=args.output,
