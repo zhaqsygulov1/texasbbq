@@ -55,6 +55,23 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def normalize_tru_code(raw_code: str) -> str:
+    """Normalize TRU code to 6.3.6 format where possible."""
+    value = clean_text(raw_code)
+    if not value:
+        return value
+
+    parts = value.split(".")
+    if len(parts) == 2 and all(part.isdigit() for part in parts):
+        middle = parts[1][:3].ljust(3, "0")
+        return f"{parts[0].zfill(6)}.{middle}.000000"
+    if len(parts) == 3 and all(part.isdigit() for part in parts):
+        middle = parts[1][:3].ljust(3, "0")
+        suffix = parts[2][:6].ljust(6, "0")
+        return f"{parts[0].zfill(6)}.{middle}.{suffix}"
+    return value
+
+
 def parse_int_from_spaced(value: str) -> int:
     return int(re.sub(r"[^\d]", "", value))
 
@@ -74,17 +91,51 @@ def download_text(session: requests.Session, url: str, *, params: dict | None = 
 
 def load_tru_codes(session: requests.Session, sheet_id: str) -> list[TruCode]:
     csv_url = build_source_csv_url(sheet_id)
-    content = download_text(session, csv_url)
-    reader = csv.DictReader(io.StringIO(content))
+    for attempt in range(1, 6):
+        try:
+            response = session.get(csv_url, timeout=45)
+            response.raise_for_status()
+            content = response.content.decode("utf-8-sig")
+            break
+        except Exception as exc:  # pylint: disable=broad-except
+            if attempt == 5:
+                raise RuntimeError(f"Failed to load source sheet CSV: {csv_url}") from exc
+            time.sleep(1.5 * attempt)
+
+    stream = io.StringIO(content)
+    reader = csv.reader(stream)
+    try:
+        raw_headers = next(reader)
+    except StopIteration as exc:
+        raise RuntimeError("Source sheet CSV is empty") from exc
+
+    headers = [clean_text(h.lstrip("\ufeff")) for h in raw_headers]
+    try:
+        code_index = headers.index("Код ТРУ")
+        name_index = headers.index("Название")
+    except ValueError as exc:
+        raise RuntimeError(f"Unexpected source sheet headers: {headers}") from exc
+
     result: list[TruCode] = []
+    converted = 0
+    seen_codes: set[str] = set()
     for row in reader:
-        code = clean_text(row.get("Код ТРУ", ""))
-        name = clean_text(row.get("Название", ""))
+        if code_index >= len(row):
+            continue
+        code = normalize_tru_code(row[code_index])
+        name = clean_text(row[name_index]) if name_index < len(row) else ""
         if not code:
             continue
+        if code != clean_text(row[code_index]):
+            converted += 1
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
         result.append(TruCode(code=code, name=name))
     if not result:
         raise RuntimeError("No TRU codes loaded from source sheet")
+    if converted:
+        print(f"Normalized TRU codes: {converted}", flush=True)
     return result
 
 
@@ -216,63 +267,64 @@ def chunks(items: list[TruCode], size: int) -> Iterable[list[TruCode]]:
         yield items[index : index + size]
 
 
-def collect_lots(
+def collect_lots_to_csv(
     tru_codes: list[TruCode],
     *,
     year: int,
     status: int | None,
     amount_from: int | None,
     workers: int,
-) -> list[dict[str, str]]:
-    all_rows: list[dict[str, str]] = []
+    output_path: Path,
+) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     completed = 0
+    total_rows = 0
     started_at = time.time()
 
-    # Split by chunks to reduce chance of long-lived stale sessions.
-    for group in chunks(tru_codes, 200):
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {}
-            for tru_code in group:
-                session = requests.Session()
-                session.headers.update(HEADERS)
-                future = executor.submit(
-                    fetch_lots_for_code,
-                    session,
-                    tru_code,
-                    year=year,
-                    status=status,
-                    amount_from=amount_from,
-                )
-                future_map[future] = tru_code
-
-            for future in as_completed(future_map):
-                tru_code = future_map[future]
-                completed += 1
-                try:
-                    rows = future.result()
-                    all_rows.extend(rows)
-                    print(
-                        f"[{completed}/{len(tru_codes)}] {tru_code.code}: {len(rows)} rows",
-                        flush=True,
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    print(
-                        f"[{completed}/{len(tru_codes)}] {tru_code.code}: ERROR {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-
-    elapsed = time.time() - started_at
-    print(f"Collected rows: {len(all_rows)} in {elapsed:.1f}s", flush=True)
-    return all_rows
-
-
-def write_csv(rows: list[dict[str, str]], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=OUTPUT_COLUMNS)
         writer.writeheader()
-        writer.writerows(rows)
+
+        # Split by chunks to reduce chance of long-lived stale sessions.
+        for group in chunks(tru_codes, 200):
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {}
+                for tru_code in group:
+                    session = requests.Session()
+                    session.headers.update(HEADERS)
+                    future = executor.submit(
+                        fetch_lots_for_code,
+                        session,
+                        tru_code,
+                        year=year,
+                        status=status,
+                        amount_from=amount_from,
+                    )
+                    future_map[future] = tru_code
+
+                for future in as_completed(future_map):
+                    tru_code = future_map[future]
+                    completed += 1
+                    try:
+                        rows = future.result()
+                        if rows:
+                            writer.writerows(rows)
+                            f.flush()
+                        total_rows += len(rows)
+                        print(
+                            f"[{completed}/{len(tru_codes)}] {tru_code.code}: {len(rows)} rows",
+                            flush=True,
+                        )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        print(
+                            f"[{completed}/{len(tru_codes)}] {tru_code.code}: ERROR {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+
+    elapsed = time.time() - started_at
+    print(f"Collected rows: {total_rows} in {elapsed:.1f}s", flush=True)
+    return total_rows
 
 
 def parse_args() -> argparse.Namespace:
@@ -319,17 +371,16 @@ def main() -> int:
         tru_codes = tru_codes[: args.max_codes]
 
     print(f"Loaded TRU codes: {len(tru_codes)}", flush=True)
-    rows = collect_lots(
+    output_path = Path(args.output)
+    total_rows = collect_lots_to_csv(
         tru_codes,
         year=args.year,
         status=status,
         amount_from=amount_from,
         workers=max(1, args.workers),
+        output_path=output_path,
     )
-    rows.sort(key=lambda item: (item["Код ТРУ"], item["№ лота"]))
-
-    output_path = Path(args.output)
-    write_csv(rows, output_path)
+    print(f"Total rows written: {total_rows}", flush=True)
     print(f"Saved CSV: {output_path.resolve()}", flush=True)
     return 0
 
