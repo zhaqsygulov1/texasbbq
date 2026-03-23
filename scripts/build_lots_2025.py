@@ -12,11 +12,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import requests
+from bs4 import BeautifulSoup
 
 
 SOURCE_SHEET_ID = "1rAeiw4xFWV6XjT1uDFka95hbMFtsxuN3hxuuMGOPz7k"
@@ -73,70 +73,32 @@ def clean_lot_name(value: str) -> str:
     return normalize_whitespace(value)
 
 
-class SearchResultParser(HTMLParser):
-    """Parses #search-result table rows from goszakup search HTML."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.in_result_table = False
-        self.in_tbody = False
-        self.in_tr = False
-        self.in_cell = False
-        self.current_cell_parts: List[str] = []
-        self.current_row: List[str] = []
-        self.rows: List[List[str]] = []
-
-    def handle_starttag(self, tag: str, attrs: List[Tuple[str, str | None]]) -> None:
-        attr_map = dict(attrs)
-        if tag == "table" and attr_map.get("id") == "search-result":
-            self.in_result_table = True
-            return
-        if not self.in_result_table:
-            return
-        if tag == "tbody":
-            self.in_tbody = True
-        elif self.in_tbody and tag == "tr":
-            self.in_tr = True
-            self.current_row = []
-        elif self.in_tr and tag in ("td", "th"):
-            self.in_cell = True
-            self.current_cell_parts = []
-
-    def handle_data(self, data: str) -> None:
-        if self.in_cell:
-            self.current_cell_parts.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "table" and self.in_result_table:
-            self.in_result_table = False
-            self.in_tbody = False
-            self.in_tr = False
-            self.in_cell = False
-            return
-        if not self.in_result_table:
-            return
-        if tag == "tbody":
-            self.in_tbody = False
-        elif tag in ("td", "th") and self.in_cell:
-            self.in_cell = False
-            cell_text = normalize_whitespace("".join(self.current_cell_parts))
-            self.current_row.append(cell_text)
-        elif tag == "tr" and self.in_tr:
-            self.in_tr = False
-            if self.current_row:
-                self.rows.append(self.current_row[:])
-
-
 def parse_lot_rows(page_text: str) -> List[List[str]]:
-    parser = SearchResultParser()
-    parser.feed(page_text)
     parsed_rows: List[List[str]] = []
-    for row in parser.rows:
-        if len(row) < 7:
+    soup = BeautifulSoup(page_text, "html.parser")
+    row_nodes = soup.select("table#search-result tbody tr")
+    for row_node in row_nodes:
+        cells = row_node.find_all("td")
+        if len(cells) < 7:
             continue
-        if row[0] == "№ лота":
+        raw_cells = [normalize_whitespace(cell.get_text(" ", strip=True)) for cell in cells[:7]]
+        if raw_cells[0] == "№ лота":
             continue
-        parsed_rows.append(row[:7])
+
+        # Due invalid markup, first cell can contain "№ лота + announcement".
+        # Lot number is still always the first token there.
+        lot_number = raw_cells[0].split(" ", 1)[0]
+        parsed_rows.append(
+            [
+                lot_number,
+                raw_cells[1],
+                raw_cells[2],
+                raw_cells[3],
+                raw_cells[4],
+                raw_cells[5],
+                raw_cells[6],
+            ]
+        )
     return parsed_rows
 
 
