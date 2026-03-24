@@ -12,14 +12,12 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
 from typing import Iterable
 
 import requests
@@ -54,6 +52,26 @@ def norm(text: str) -> str:
 def parse_int_ru(value: str) -> int:
     cleaned = re.sub(r"[^\d]", "", value or "")
     return int(cleaned) if cleaned else 0
+
+
+def clean_announce_text(raw_text: str) -> str:
+    text = norm(raw_text)
+    # In the table cell announcement title is followed by optional customer line.
+    return norm(text.split(" Заказчик:", maxsplit=1)[0])
+
+
+def clean_lot_desc_text(raw_text: str) -> str:
+    text = norm(raw_text)
+    # "История" is a UI-only link text and should not be in output.
+    return norm(text.removesuffix(" История"))
+
+
+def extract_primary_text(td) -> str:
+    """Prefer visible title text inside <strong> over full cell text."""
+    strong = td.select_one("a strong")
+    if strong:
+        return norm(strong.get_text(" ", strip=True))
+    return norm(td.get_text(" ", strip=True))
 
 
 def retry_get(session: requests.Session, url: str, params: dict, attempts: int = 6) -> str:
@@ -107,8 +125,8 @@ def parse_rows(html_text: str, code: str, product_name: str) -> tuple[list[list[
             continue
 
         lot_number = norm(tds[0].get_text(" ", strip=True))
-        announce_name = norm(tds[1].get_text(" ", strip=True))
-        lot_desc = norm(tds[2].get_text(" ", strip=True))
+        announce_name = clean_announce_text(extract_primary_text(tds[1]))
+        lot_desc = clean_lot_desc_text(extract_primary_text(tds[2]))
         qty = norm(tds[3].get_text(" ", strip=True))
         amount = norm(tds[4].get_text(" ", strip=True))
         method = norm(tds[5].get_text(" ", strip=True))
@@ -236,7 +254,6 @@ def build_report(
     failed_codes = 0
     written_rows = 0
     seen: set[tuple[str, str]] = set()
-    lock = Lock()
     errors: list[CodeResult] = []
 
     with output_csv_path.open("w", encoding="utf-8-sig", newline="") as out_fh:
@@ -282,10 +299,6 @@ def build_report(
                         ),
                         flush=True,
                     )
-
-                # Keep writes and set updates thread-safe if run model changes in future.
-                with lock:
-                    pass
 
     if errors:
         err_path = output_csv_path.with_suffix(".errors.csv")
