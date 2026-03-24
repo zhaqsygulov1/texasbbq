@@ -1,0 +1,289 @@
+{
+  "chunk_size": 8000,
+  "total_chunks": 47,
+  "total_rows_including_header": 372619,
+  "chunks": [
+    {
+      "index": 1,
+      "path": "/workspace/upload_chunks/chunk_0001.tsv",
+      "start_row": 1,
+      "row_count": 8000
+    },
+    {
+      "index": 2,
+      "path": "/workspace/upload_chunks/chunk_0002.tsv",
+      "start_row": 8001,
+      "row_count": 8000
+    },
+    {
+      "index": 3,
+      "path": "/workspace/upload_chunks/chunk_0003.tsv",
+      "start_row": 16001,
+      "row_count": 8000
+    },
+    {
+      "index": 4,
+      "path": "/workspace/upload_chunks/chunk_0004.tsv",
+      "start_row": 24001,
+      "row_count": 8000
+    },
+    {
+      "index": 5,
+      "path": "/workspace/upload_chunks/chunk_0005.tsv",
+      "start_row": 32001,
+      "row_count": 8000
+    },
+    {
+      "index": 6,
+      "path": "/workspace/upload_chunks/chunk_0006.tsv",
+      "start_row": 40001,
+      "row_count": 8000
+    },
+    {
+      "index": 7,
+      "path": "/workspace/upload_chunks/chunk_0007.tsv",
+      "start_row": 48001,
+      "row_count": 8000
+    },
+    {
+      "index": 8,
+      "path": "/workspace/upload_chunks/chunk_0008.tsv",
+      "start_row": 56001,
+      "row_count": 8000
+    },
+    {
+      "index": 9,
+      "path": "/workspace/upload_chunks/chunk_0009.tsv",
+      "start_row": 64001,
+      "row_count": 8000
+    },
+    {
+      "index": 10,
+      "path": "/workspace/upload_chunks/chunk_0010.tsv",
+      "start_row": 72001,
+      "row_count": 8000
+    },
+    {
+      "index": 11,
+      "path": "/workspace/upload_chunks/chunk_0011.tsv",
+      "start_row": 80001,
+      "row_count": 8000
+    },
+    {
+      "index": 12,
+      "path": "/workspace/upload_chunks/chunk_0012.tsv",
+      "start_row": 88001,
+      "row_count": 8000
+    },
+    {
+      "index": 13,
+      "path": "/workspace/upload_chunks/chunk_0013.tsv",
+      "start_row": 96001,
+      "row_count": 8000
+    },
+    {
+      "index": 14,
+      "path": "/workspace/upload_chunks/chunk_0014.tsv",
+      "start_row": 104001,
+      "row_count": 8000
+    },
+    {
+      "index": 15,
+      "path": "/workspace/upload_chunks/chunk_0015.tsv",
+      "start_row": 112001,
+      "row_count": 8000
+    },
+    {
+      "index": 16,
+      "path": "/workspace/upload_chunks/chunk_0016.tsv",
+      "start_row": 120001,
+      "row_count": 8000
+    },
+    {
+      "index": 17,
+      "path": "/workspace/upload_chunks/chunk_0017.tsv",
+      "start_row": 128001,
+      "row_count": 8000
+    },
+    {
+      "index": 18,
+      "path": "/workspace/upload_chunks/chunk_0018.tsv",
+      "start_row": 136001,
+      "row_count": 8000
+    },
+    {
+      "index": 19,
+      "path": "/workspace/upload_chunks/chunk_0019.tsv",
+      "start_row": 144001,
+      "row_count": 8000
+    },
+    {
+      "index": 20,
+      "path": "/workspace/upload_chunks/chunk_0020.tsv",
+      "start_row": 152001,
+      "row_count": 8000
+    },
+    {
+      "index": 21,
+      "path": "/workspace/upload_chunks/chunk_0021.tsv",
+      "start_row": 160001,
+      "row_count": 8000
+    },
+    {
+      "index": 22,
+      "path": "/workspace/upload_chunks/chunk_0022.tsv",
+      "start_row": 168001,
+      "row_count": 8000
+    },
+    {
+      "index": 23,
+      "path": "/workspace/upload_chunks/chunk_0023.tsv",
+      "start_row": 176001,
+      "row_count": 8000
+    },
+    {
+      "index": 24,
+      "path": "/workspace/upload_chunks/chunk_0024.tsv",
+      "start_row": 184001,
+      "row_count": 8000
+    },
+    {
+      "index": 25,
+      "path": "/workspace/upload_chunks/chunk_0025.tsv",
+      "start_row": 192001,
+      "row_count": 8000
+    },
+    {
+      "index": 26,
+      "path": "/workspace/upload_chunks/chunk_0026.tsv",
+      "start_row": 200001,
+      "row_count": 8000
+    },
+    {
+      "index": 27,
+      "path": "/workspace/upload_chunks/chunk_0027.tsv",
+      "start_row": 208001,
+      "row_count": 8000
+    },
+    {
+      "index": 28,
+      "path": "/workspace/upload_chunks/chunk_0028.tsv",
+      "start_row": 216001,
+      "row_count": 8000
+    },
+    {
+      "index": 29,
+      "path": "/workspace/upload_chunks/chunk_0029.tsv",
+      "start_row": 224001,
+      "row_count": 8000
+    },
+    {
+      "index": 30,
+      "path": "/workspace/upload_chunks/chunk_0030.tsv",
+      "start_row": 232001,
+      "row_count": 8000
+    },
+    {
+      "index": 31,
+      "path": "/workspace/upload_chunks/chunk_0031.tsv",
+      "start_row": 240001,
+      "row_count": 8000
+    },
+    {
+      "index": 32,
+      "path": "/workspace/upload_chunks/chunk_0032.tsv",
+      "start_row": 248001,
+      "row_count": 8000
+    },
+    {
+      "index": 33,
+      "path": "/workspace/upload_chunks/chunk_0033.tsv",
+      "start_row": 256001,
+      "row_count": 8000
+    },
+    {
+      "index": 34,
+      "path": "/workspace/upload_chunks/chunk_0034.tsv",
+      "start_row": 264001,
+      "row_count": 8000
+    },
+    {
+      "index": 35,
+      "path": "/workspace/upload_chunks/chunk_0035.tsv",
+      "start_row": 272001,
+      "row_count": 8000
+    },
+    {
+      "index": 36,
+      "path": "/workspace/upload_chunks/chunk_0036.tsv",
+      "start_row": 280001,
+      "row_count": 8000
+    },
+    {
+      "index": 37,
+      "path": "/workspace/upload_chunks/chunk_0037.tsv",
+      "start_row": 288001,
+      "row_count": 8000
+    },
+    {
+      "index": 38,
+      "path": "/workspace/upload_chunks/chunk_0038.tsv",
+      "start_row": 296001,
+      "row_count": 8000
+    },
+    {
+      "index": 39,
+      "path": "/workspace/upload_chunks/chunk_0039.tsv",
+      "start_row": 304001,
+      "row_count": 8000
+    },
+    {
+      "index": 40,
+      "path": "/workspace/upload_chunks/chunk_0040.tsv",
+      "start_row": 312001,
+      "row_count": 8000
+    },
+    {
+      "index": 41,
+      "path": "/workspace/upload_chunks/chunk_0041.tsv",
+      "start_row": 320001,
+      "row_count": 8000
+    },
+    {
+      "index": 42,
+      "path": "/workspace/upload_chunks/chunk_0042.tsv",
+      "start_row": 328001,
+      "row_count": 8000
+    },
+    {
+      "index": 43,
+      "path": "/workspace/upload_chunks/chunk_0043.tsv",
+      "start_row": 336001,
+      "row_count": 8000
+    },
+    {
+      "index": 44,
+      "path": "/workspace/upload_chunks/chunk_0044.tsv",
+      "start_row": 344001,
+      "row_count": 8000
+    },
+    {
+      "index": 45,
+      "path": "/workspace/upload_chunks/chunk_0045.tsv",
+      "start_row": 352001,
+      "row_count": 8000
+    },
+    {
+      "index": 46,
+      "path": "/workspace/upload_chunks/chunk_0046.tsv",
+      "start_row": 360001,
+      "row_count": 8000
+    },
+    {
+      "index": 47,
+      "path": "/workspace/upload_chunks/chunk_0047.tsv",
+      "start_row": 368001,
+      "row_count": 4619
+    }
+  ]
+}

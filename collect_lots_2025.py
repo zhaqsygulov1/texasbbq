@@ -470,6 +470,8 @@ def main() -> int:
     resumed = load_resume(resume_json)
     processed_codes = set(resumed.get("processed_codes", []))
     failed_codes: dict[str, str] = resumed.get("failed_codes", {})
+    # Drop stale failures that were later processed successfully.
+    failed_codes = {k: v for k, v in failed_codes.items() if k not in processed_codes}
     per_code: dict[str, dict[str, int | str]] = resumed.get("per_code", {})
     pending_codes = [tru for tru in tru_codes if tru.code not in processed_codes]
     print(
@@ -507,6 +509,7 @@ def main() -> int:
                 with lock:
                     raw_written += append_rows(raw_csv, rows)
                     processed_codes.add(code)
+                    failed_codes.pop(code, None)
                     per_code[code] = {
                         "tru_name": tru.name,
                         "rows_collected": len(rows),
