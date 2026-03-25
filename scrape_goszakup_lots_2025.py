@@ -228,6 +228,41 @@ def fetch_lots_for_code(
     return all_rows, total_hint or 0
 
 
+def smart_fetch_lots_for_code(
+    session: requests.Session,
+    code: str,
+    item_name: str,
+    year: int,
+    count_record: int,
+    delay: float,
+    max_pages: int | None = None,
+) -> Tuple[List[List[str]], int]:
+    rows, hint = fetch_lots_for_code(
+        session=session,
+        code=code,
+        item_name=item_name,
+        year=year,
+        count_record=count_record,
+        delay=delay,
+        max_pages=max_pages,
+    )
+    # Goszakup can cap results around 10k for broad/truncated codes.
+    # A fallback with smaller page size often retrieves more complete pages.
+    if len(rows) >= 10000 and count_record > 500:
+        alt_rows, alt_hint = fetch_lots_for_code(
+            session=session,
+            code=code,
+            item_name=item_name,
+            year=year,
+            count_record=500,
+            delay=delay,
+            max_pages=max_pages,
+        )
+        if len(alt_rows) > len(rows):
+            return alt_rows, alt_hint
+    return rows, hint
+
+
 def try_clear_and_append_google_sheet(sheet_id: str, rows: List[List[str]]) -> Tuple[bool, str]:
     """Best-effort unauthenticated call to show explicit permission outcome."""
     clear_url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A1:Z:clear"
@@ -297,7 +332,7 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             future_to_code = {
                 pool.submit(
-                    fetch_lots_for_code,
+                    smart_fetch_lots_for_code,
                     session,
                     code,
                     item_name,
