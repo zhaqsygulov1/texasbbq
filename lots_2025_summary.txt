@@ -1,0 +1,15 @@
+year=2025
+source_codes_raw=3435
+source_codes_unique=3435
+processed_codes=3435
+success_codes=3435
+failed_codes=0
+output_rows=202463
+output_csv=/workspace/lots_2025_by_tru.csv
+output_csv_gz=/workspace/lots_2025_by_tru.csv.gz
+sheet_upload_attempt=ok=False; clear=401, append=401, append_text={
+  "error": {
+    "code": 401,
+    "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+    "status": "UNAUTHENTICATED",
+ 
