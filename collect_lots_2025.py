@@ -401,7 +401,19 @@ def main() -> int:
             pages = min(pages, 100)
 
             all_rows = parse_rows(first_page, code, name)
-            for page in range(1, pages):
+            seen_row_keys = {
+                (
+                    row["№ лота"],
+                    row["Код ТРУ"],
+                    row["Наименование объявления"],
+                    row["Наименование и описание лота"],
+                )
+                for row in all_rows
+            }
+
+            # goszakup pagination quirk:
+            # page=1 repeats first chunk (1..count_record), so next unique chunk starts at page=2.
+            for page in range(2, pages + 1):
                 params = dict(base_params)
                 params["page"] = str(page)
                 page_html = request_page_with_retry(
@@ -410,7 +422,18 @@ def main() -> int:
                     timeout=args.request_timeout,
                     max_retries=args.max_retries,
                 )
-                all_rows.extend(parse_rows(page_html, code, name))
+                page_rows = parse_rows(page_html, code, name)
+                for row in page_rows:
+                    row_key = (
+                        row["№ лота"],
+                        row["Код ТРУ"],
+                        row["Наименование объявления"],
+                        row["Наименование и описание лота"],
+                    )
+                    if row_key in seen_row_keys:
+                        continue
+                    seen_row_keys.add(row_key)
+                    all_rows.append(row)
                 time.sleep(args.sleep_seconds)
 
             append_rows(output_csv, all_rows)
