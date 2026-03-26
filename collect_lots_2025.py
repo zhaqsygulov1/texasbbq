@@ -57,6 +57,7 @@ RE_TOTAL = re.compile(r"из\s+([\d\s]+)\s+записей", re.IGNORECASE)
 RE_PAGE = re.compile(r"[?&]page=(\d+)")
 RE_HISTORY_TRAIL = re.compile(r"\s*История\s*$", re.IGNORECASE)
 RE_POSSIBLE_LOT = re.compile(r"^\d{4,}-")
+CAPTCHA_TITLE_MARKER = "429 Too Many Requests"
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,53 @@ def fetch_with_retry(
             time.sleep(delay)
             delay *= 2
     raise RuntimeError(f"Failed to fetch {url}: {last_err}") from last_err
+
+
+def ensure_valid_lots_page(response: requests.Response, code: str, page: int) -> None:
+    soup = BeautifulSoup(response.text, "lxml")
+    title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+    if CAPTCHA_TITLE_MARKER.lower() in title.lower() or "/captcha" in response.url:
+        raise RuntimeError(
+            f"Rate limited / captcha for code={code}, page={page} ({response.url})"
+        )
+
+    table = soup.select_one("table tbody")
+    info = soup.select_one("div.dataTables_info")
+    if table is None or info is None:
+        raise RuntimeError(
+            f"Unexpected response structure for code={code}, page={page} ({response.url})"
+        )
+
+
+def fetch_lots_page(
+    session: requests.Session,
+    code: str,
+    year: int,
+    page: int,
+    page_size: int,
+    retries: int = 8,
+) -> requests.Response:
+    delay = 2.0
+    last_err: Exception | None = None
+    params = page_params(code, year, page=page, page_size=page_size)
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = fetch_with_retry(
+                session, LOTS_URL, params=params, retries=3, timeout=45
+            )
+            ensure_valid_lots_page(response, code=code, page=page)
+            return response
+        except Exception as err:  # noqa: BLE001
+            last_err = err
+            if attempt == retries:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 35.0)
+
+    raise RuntimeError(
+        f"Failed to fetch valid lots page for code={code}, page={page}: {last_err}"
+    ) from last_err
 
 
 def read_tru_items(sheet_id: str) -> list[TruItem]:
@@ -193,12 +241,8 @@ def fetch_rows_for_code(
     session = get_session()
     rows: list[list[str]] = []
 
-    first_resp = fetch_with_retry(
-        session,
-        LOTS_URL,
-        params=page_params(item.code, year, page=1, page_size=page_size),
-        retries=4,
-        timeout=45,
+    first_resp = fetch_lots_page(
+        session, code=item.code, year=year, page=1, page_size=page_size
     )
     first_soup = BeautifulSoup(first_resp.text, "lxml")
     total = parse_total_records(first_soup)
@@ -210,12 +254,8 @@ def fetch_rows_for_code(
     for page in range(2, page_count + 1):
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-        resp = fetch_with_retry(
-            session,
-            LOTS_URL,
-            params=page_params(item.code, year, page=page, page_size=page_size),
-            retries=4,
-            timeout=45,
+        resp = fetch_lots_page(
+            session, code=item.code, year=year, page=page, page_size=page_size
         )
         soup = BeautifulSoup(resp.text, "lxml")
         rows.extend(_to_output_rows(item, extract_lot_rows(soup)))
