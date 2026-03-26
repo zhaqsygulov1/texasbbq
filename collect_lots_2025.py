@@ -25,8 +25,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urljoin
-
 import requests
 from bs4 import BeautifulSoup
 
@@ -53,7 +51,10 @@ UA = (
 )
 
 RE_MULTI_SPACE = re.compile(r"\s+")
-RE_TOTAL = re.compile(r"из\s+([\d\s]+)\s+записей", re.IGNORECASE)
+RE_RANGE_TOTAL = re.compile(
+    r"c\s+([\d\s]+)\s+по\s+([\d\s]+)\s+из\s+([\d\s]+)\s+записей",
+    re.IGNORECASE,
+)
 RE_PAGE = re.compile(r"[?&]page=(\d+)")
 RE_HISTORY_TRAIL = re.compile(r"\s*История\s*$", re.IGNORECASE)
 RE_POSSIBLE_LOT = re.compile(r"^\d{4,}-")
@@ -178,13 +179,30 @@ def read_tru_items(sheet_id: str) -> list[TruItem]:
     return result
 
 
-def parse_total_records(soup: BeautifulSoup) -> int:
+def parse_range_and_total(soup: BeautifulSoup) -> tuple[int, int, int] | None:
+    info = soup.select_one("div.dataTables_info")
+    if not info:
+        return None
+    text = normalize_text(info.get_text(" ", strip=True))
+    match = RE_RANGE_TOTAL.search(text)
+    if not match:
+        return None
+    start = int(match.group(1).replace(" ", ""))
+    end = int(match.group(2).replace(" ", ""))
+    total = int(match.group(3).replace(" ", ""))
+    return start, end, total
+
+
+def parse_total_records(soup: BeautifulSoup, page_size: int) -> int:
+    range_info = parse_range_and_total(soup)
+    if range_info is not None:
+        return range_info[2]
+
     info = soup.select_one("div.dataTables_info")
     if info:
         text = normalize_text(info.get_text(" ", strip=True))
-        match = RE_TOTAL.search(text)
-        if match:
-            return int(match.group(1).replace(" ", ""))
+        if "из 0 записей" in text:
+            return 0
 
     max_page = 1
     for anchor in soup.select("ul.pagination a[href]"):
@@ -192,7 +210,7 @@ def parse_total_records(soup: BeautifulSoup) -> int:
         match = RE_PAGE.search(href)
         if match:
             max_page = max(max_page, int(match.group(1)))
-    return max_page * 50
+    return max_page * page_size
 
 
 def extract_lot_rows(soup: BeautifulSoup) -> list[dict[str, str]]:
@@ -245,8 +263,14 @@ def fetch_rows_for_code(
         session, code=item.code, year=year, page=1, page_size=page_size
     )
     first_soup = BeautifulSoup(first_resp.text, "lxml")
-    total = parse_total_records(first_soup)
-    page_count = max(1, math.ceil(total / page_size))
+    total = parse_total_records(first_soup, page_size=page_size)
+    range_info = parse_range_and_total(first_soup)
+    if range_info is not None:
+        start, end, _ = range_info
+        effective_page_size = max(1, end - start + 1) if end >= start else page_size
+    else:
+        effective_page_size = page_size
+    page_count = max(1, math.ceil(total / effective_page_size))
     if max_pages is not None:
         page_count = min(page_count, max_pages)
     rows.extend(_to_output_rows(item, extract_lot_rows(first_soup)))
@@ -259,6 +283,11 @@ def fetch_rows_for_code(
         )
         soup = BeautifulSoup(resp.text, "lxml")
         rows.extend(_to_output_rows(item, extract_lot_rows(soup)))
+
+    if len(rows) != total:
+        raise RuntimeError(
+            f"Row count mismatch for code={item.code}: parsed={len(rows)} total={total}"
+        )
     return rows
 
 
