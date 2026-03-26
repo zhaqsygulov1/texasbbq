@@ -1,0 +1,24 @@
+node_modules/
+
+# Generated artifacts from lot collection runs
+.lots_state*/
+lots_2025*.csv
+lots_part*.csv
+source_tru.csv
+target_sheet.csv
+sample_*.html
+source_edit_page.html
+target_edit_page.html
+part*.log
+upload_chunks/
+upload_result.json
+upload_complete.png
+sheet_edit_test.png
+target_sheet_probe.png
+persist_check.png
+find_check.png
+uploaded_sheet_export.csv
+uploaded_sheet_gviz.csv
+uploaded_sheet_ui_check.png
+edit_test_export.csv
+paste_test*
