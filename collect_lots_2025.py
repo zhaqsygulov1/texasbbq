@@ -523,6 +523,12 @@ def main() -> int:
         action="store_false",
         help="Disable month split for capped codes.",
     )
+    parser.add_argument(
+        "--save-progress-every",
+        type=int,
+        default=25,
+        help="Rewrite output CSV every N processed codes (0 = only at end).",
+    )
     args = parser.parse_args()
 
     session = create_session()
@@ -549,6 +555,8 @@ def main() -> int:
 
     start = time.time()
     print(f"Processing TRU codes: {len(tru_codes)}", flush=True)
+    if args.save_progress_every > 0:
+        write_csv(args.output_csv, all_rows)
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         future_map = {
             pool.submit(
@@ -589,6 +597,12 @@ def main() -> int:
                     f"rows collected: {len(all_rows)}",
                     flush=True,
                 )
+            if args.save_progress_every > 0 and (
+                processed % args.save_progress_every == 0
+                or processed == len(tru_codes)
+            ):
+                all_rows.sort(key=lambda r: (r.tru_code, r.lot_number))
+                write_csv(args.output_csv, all_rows)
 
     all_rows.sort(key=lambda r: (r.tru_code, r.lot_number))
     write_csv(args.output_csv, all_rows)
