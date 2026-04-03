@@ -48,6 +48,7 @@ DEFAULT_FILTERS = {
 
 COUNT_PER_PAGE_DEFAULT = 500
 TOTAL_RE = re.compile(r"Показано c\s*\d+\s*по\s*\d+\s*из\s*([\d\s]+)\s*записей")
+CAP_SPLIT_THRESHOLD_DEFAULT = 9998
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,7 @@ def build_lots_url_params(
     status: str,
     amount_from: str,
     count_per_page: int,
+    month: int | None = None,
 ) -> dict:
     params = {
         "filter[enstru]": tru_code,
@@ -139,6 +141,8 @@ def build_lots_url_params(
         "filter[amount_from]": amount_from,
         "count_record": str(count_per_page),
     }
+    if month is not None:
+        params["filter[month]"] = str(month)
     if page > 1:
         params["page"] = str(page)
     return params
@@ -152,6 +156,7 @@ def fetch_page_html(
     status: str,
     amount_from: str,
     count_per_page: int,
+    month: int | None,
     retries: int = 3,
 ) -> str:
     url = "https://goszakup.gov.kz/ru/search/lots"
@@ -162,6 +167,7 @@ def fetch_page_html(
         status,
         amount_from,
         count_per_page,
+        month,
     )
     for attempt in range(1, retries + 1):
         try:
@@ -257,6 +263,7 @@ def fetch_and_parse_page_rows(
     status: str,
     amount_from: str,
     count_per_page: int,
+    month: int | None = None,
     retries_on_empty: int = 3,
 ) -> tuple[str, List[LotRow]]:
     html = fetch_page_html(
@@ -267,6 +274,7 @@ def fetch_and_parse_page_rows(
         status=status,
         amount_from=amount_from,
         count_per_page=count_per_page,
+        month=month,
     )
     rows = parse_lot_rows_from_html(html, tru)
     total_records = parse_total_records(html)
@@ -285,6 +293,7 @@ def fetch_and_parse_page_rows(
             status=status,
             amount_from=amount_from,
             count_per_page=count_per_page,
+            month=month,
         )
         rows = parse_lot_rows_from_html(html, tru)
         if rows:
@@ -292,16 +301,17 @@ def fetch_and_parse_page_rows(
     return html, rows
 
 
-def fetch_all_lots_for_tru(
+def fetch_lots_for_filter(
     session: requests.Session,
     tru: TruCode,
     year: str,
     status: str,
     amount_from: str,
     count_per_page: int,
+    month: int | None,
     max_pages: int | None = None,
     retries_on_empty: int = 3,
-) -> List[LotRow]:
+) -> tuple[int, List[LotRow]]:
     html, rows = fetch_and_parse_page_rows(
         session=session,
         tru=tru,
@@ -310,11 +320,12 @@ def fetch_all_lots_for_tru(
         status=status,
         amount_from=amount_from,
         count_per_page=count_per_page,
+        month=month,
         retries_on_empty=retries_on_empty,
     )
     total_records = parse_total_records(html)
     if total_records <= count_per_page:
-        return rows
+        return total_records, rows
 
     total_pages = math.ceil(total_records / count_per_page)
     if max_pages is not None:
@@ -330,10 +341,65 @@ def fetch_all_lots_for_tru(
             status=status,
             amount_from=amount_from,
             count_per_page=count_per_page,
+            month=month,
             retries_on_empty=retries_on_empty,
         )
         rows.extend(page_rows)
-    return rows
+    return total_records, rows
+
+
+def fetch_all_lots_for_tru(
+    session: requests.Session,
+    tru: TruCode,
+    year: str,
+    status: str,
+    amount_from: str,
+    count_per_page: int,
+    max_pages: int | None = None,
+    retries_on_empty: int = 3,
+    split_capped_by_month: bool = True,
+    cap_split_threshold: int = CAP_SPLIT_THRESHOLD_DEFAULT,
+) -> List[LotRow]:
+    total_records, rows = fetch_lots_for_filter(
+        session=session,
+        tru=tru,
+        year=year,
+        status=status,
+        amount_from=amount_from,
+        count_per_page=count_per_page,
+        month=None,
+        max_pages=max_pages,
+        retries_on_empty=retries_on_empty,
+    )
+
+    if not split_capped_by_month or total_records < cap_split_threshold:
+        return rows
+
+    print(
+        f"[INFO] {tru.code}: total={total_records}, split by month",
+        flush=True,
+    )
+    merged_rows: List[LotRow] = []
+    seen_lots = set()
+    for month in range(1, 13):
+        _, month_rows = fetch_lots_for_filter(
+            session=session,
+            tru=tru,
+            year=year,
+            status=status,
+            amount_from=amount_from,
+            count_per_page=count_per_page,
+            month=month,
+            max_pages=max_pages,
+            retries_on_empty=retries_on_empty,
+        )
+        for row in month_rows:
+            key = (row.lot_number, row.tru_code)
+            if key in seen_lots:
+                continue
+            seen_lots.add(key)
+            merged_rows.append(row)
+    return merged_rows or rows
 
 
 def collect_lots_for_tru(
@@ -344,6 +410,8 @@ def collect_lots_for_tru(
     count_per_page: int,
     max_pages: int | None,
     retries_on_empty: int,
+    split_capped_by_month: bool,
+    cap_split_threshold: int,
 ) -> List[LotRow]:
     # requests.Session is not thread-safe; keep one session per worker task.
     session = create_session()
@@ -357,6 +425,8 @@ def collect_lots_for_tru(
             count_per_page=count_per_page,
             max_pages=max_pages,
             retries_on_empty=retries_on_empty,
+            split_capped_by_month=split_capped_by_month,
+            cap_split_threshold=cap_split_threshold,
         )
     finally:
         session.close()
@@ -434,6 +504,25 @@ def main() -> int:
         default=5,
         help="Extra retries only when page expected to have data.",
     )
+    parser.add_argument(
+        "--cap-split-threshold",
+        type=int,
+        default=CAP_SPLIT_THRESHOLD_DEFAULT,
+        help="If total rows reach this threshold, split by month.",
+    )
+    parser.add_argument(
+        "--split-capped-by-month",
+        dest="split_capped_by_month",
+        action="store_true",
+        default=True,
+        help="Split capped codes by month to avoid portal cap.",
+    )
+    parser.add_argument(
+        "--no-split-capped-by-month",
+        dest="split_capped_by_month",
+        action="store_false",
+        help="Disable month split for capped codes.",
+    )
     args = parser.parse_args()
 
     session = create_session()
@@ -471,6 +560,8 @@ def main() -> int:
                 max(1, args.count_record),
                 max_pages,
                 max(0, args.retries_on_empty),
+                args.split_capped_by_month,
+                max(0, args.cap_split_threshold),
             ): tru
             for tru in tru_codes
         }
