@@ -45,7 +45,7 @@ DEFAULT_FILTERS = {
     "amount_from": "15000000",
 }
 
-COUNT_PER_PAGE = 50
+COUNT_PER_PAGE_DEFAULT = 500
 TOTAL_RE = re.compile(r"Показано c\s*\d+\s*по\s*\d+\s*из\s*([\d\s]+)\s*записей")
 
 
@@ -129,13 +129,14 @@ def build_lots_url_params(
     year: str,
     status: str,
     amount_from: str,
+    count_per_page: int,
 ) -> dict:
     params = {
         "filter[enstru]": tru_code,
         "filter[year]": year,
         "filter[status][]": status,
         "filter[amount_from]": amount_from,
-        "count_record": str(COUNT_PER_PAGE),
+        "count_record": str(count_per_page),
     }
     if page > 1:
         params["page"] = str(page)
@@ -149,10 +150,18 @@ def fetch_page_html(
     year: str,
     status: str,
     amount_from: str,
+    count_per_page: int,
     retries: int = 3,
 ) -> str:
     url = "https://goszakup.gov.kz/ru/search/lots"
-    params = build_lots_url_params(tru_code, page, year, status, amount_from)
+    params = build_lots_url_params(
+        tru_code,
+        page,
+        year,
+        status,
+        amount_from,
+        count_per_page,
+    )
     for attempt in range(1, retries + 1):
         try:
             resp = session.get(url, params=params, timeout=45)
@@ -246,6 +255,7 @@ def fetch_and_parse_page_rows(
     year: str,
     status: str,
     amount_from: str,
+    count_per_page: int,
     retries_on_empty: int = 3,
 ) -> tuple[str, List[LotRow]]:
     html = fetch_page_html(
@@ -255,6 +265,7 @@ def fetch_and_parse_page_rows(
         year=year,
         status=status,
         amount_from=amount_from,
+        count_per_page=count_per_page,
     )
     rows = parse_lot_rows_from_html(html, tru)
     total_records = parse_total_records(html)
@@ -272,6 +283,7 @@ def fetch_and_parse_page_rows(
             year=year,
             status=status,
             amount_from=amount_from,
+            count_per_page=count_per_page,
         )
         rows = parse_lot_rows_from_html(html, tru)
         if rows:
@@ -285,6 +297,7 @@ def fetch_all_lots_for_tru(
     year: str,
     status: str,
     amount_from: str,
+    count_per_page: int,
     max_pages: int | None = None,
     retries_on_empty: int = 3,
 ) -> List[LotRow]:
@@ -295,13 +308,14 @@ def fetch_all_lots_for_tru(
         year=year,
         status=status,
         amount_from=amount_from,
+        count_per_page=count_per_page,
         retries_on_empty=retries_on_empty,
     )
     total_records = parse_total_records(html)
-    if total_records <= COUNT_PER_PAGE:
+    if total_records <= count_per_page:
         return rows
 
-    total_pages = math.ceil(total_records / COUNT_PER_PAGE)
+    total_pages = math.ceil(total_records / count_per_page)
     if max_pages is not None:
         total_pages = min(total_pages, max_pages)
 
@@ -313,6 +327,7 @@ def fetch_all_lots_for_tru(
             year=year,
             status=status,
             amount_from=amount_from,
+            count_per_page=count_per_page,
             retries_on_empty=retries_on_empty,
         )
         rows.extend(page_rows)
@@ -324,6 +339,7 @@ def collect_lots_for_tru(
     year: str,
     status: str,
     amount_from: str,
+    count_per_page: int,
     max_pages: int | None,
     retries_on_empty: int,
 ) -> List[LotRow]:
@@ -336,6 +352,7 @@ def collect_lots_for_tru(
             year=year,
             status=status,
             amount_from=amount_from,
+            count_per_page=count_per_page,
             max_pages=max_pages,
             retries_on_empty=retries_on_empty,
         )
@@ -404,6 +421,12 @@ def main() -> int:
         help="Limit pages per code (0 = no limit).",
     )
     parser.add_argument(
+        "--count-record",
+        type=int,
+        default=COUNT_PER_PAGE_DEFAULT,
+        help="Rows per page requested from portal (max practical: 500).",
+    )
+    parser.add_argument(
         "--retries-on-empty",
         type=int,
         default=2,
@@ -443,6 +466,7 @@ def main() -> int:
                 args.year,
                 args.status,
                 args.amount_from,
+                max(1, args.count_record),
                 max_pages,
                 max(0, args.retries_on_empty),
             ): tru
