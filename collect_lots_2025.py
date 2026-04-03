@@ -175,9 +175,33 @@ def parse_lot_rows_from_html(html: str, tru: TruCode) -> List[LotRow]:
         if len(tds) < 7:
             continue
 
-        lot_number = normalize_ws(tds[0].get_text(" ", strip=True))
-        announcement_name = normalize_ws(tds[1].get_text(" ", strip=True))
-        lot_name_desc = normalize_ws(tds[2].get_text(" ", strip=True))
+        lot_cell = tds[0]
+        anno_cell = tds[1]
+        lot_desc_cell = tds[2]
+
+        lot_number = ""
+        lot_strong = lot_cell.find("strong")
+        if lot_strong:
+            lot_number = normalize_ws(lot_strong.get_text(" ", strip=True))
+        if not lot_number:
+            lot_text = normalize_ws(lot_cell.get_text(" ", strip=True))
+            lot_match = re.search(r"\d+-[^\s]+", lot_text)
+            lot_number = lot_match.group(0) if lot_match else lot_text
+
+        announcement_name = ""
+        anno_strong = anno_cell.find("strong")
+        if anno_strong:
+            announcement_name = normalize_ws(anno_strong.get_text(" ", strip=True))
+        if not announcement_name:
+            announcement_name = normalize_ws(anno_cell.get_text(" ", strip=True))
+
+        lot_name_desc = ""
+        desc_strong = lot_desc_cell.find("strong")
+        if desc_strong:
+            lot_name_desc = normalize_ws(desc_strong.get_text(" ", strip=True))
+        if not lot_name_desc:
+            lot_name_desc = normalize_ws(lot_desc_cell.get_text(" ", strip=True))
+
         quantity = normalize_ws(tds[3].get_text(" ", strip=True))
         amount = normalize_ws(tds[4].get_text(" ", strip=True))
         method = normalize_ws(tds[5].get_text(" ", strip=True))
@@ -201,6 +225,43 @@ def parse_lot_rows_from_html(html: str, tru: TruCode) -> List[LotRow]:
     return rows
 
 
+def fetch_and_parse_page_rows(
+    session: requests.Session,
+    tru: TruCode,
+    page: int,
+    year: str,
+    status: str,
+    amount_from: str,
+    retries_on_empty: int = 3,
+) -> tuple[str, List[LotRow]]:
+    html = fetch_page_html(
+        session=session,
+        tru_code=tru.code,
+        page=page,
+        year=year,
+        status=status,
+        amount_from=amount_from,
+    )
+    rows = parse_lot_rows_from_html(html, tru)
+    if rows:
+        return html, rows
+
+    for attempt in range(1, retries_on_empty + 1):
+        time.sleep(0.7 * attempt)
+        html = fetch_page_html(
+            session=session,
+            tru_code=tru.code,
+            page=page,
+            year=year,
+            status=status,
+            amount_from=amount_from,
+        )
+        rows = parse_lot_rows_from_html(html, tru)
+        if rows:
+            return html, rows
+    return html, rows
+
+
 def fetch_all_lots_for_tru(
     session: requests.Session,
     tru: TruCode,
@@ -209,16 +270,15 @@ def fetch_all_lots_for_tru(
     amount_from: str,
     max_pages: int | None = None,
 ) -> List[LotRow]:
-    html = fetch_page_html(
+    html, rows = fetch_and_parse_page_rows(
         session=session,
-        tru_code=tru.code,
+        tru=tru,
         page=1,
         year=year,
         status=status,
         amount_from=amount_from,
     )
     total_records = parse_total_records(html)
-    rows = parse_lot_rows_from_html(html, tru)
     if total_records <= COUNT_PER_PAGE:
         return rows
 
@@ -227,15 +287,15 @@ def fetch_all_lots_for_tru(
         total_pages = min(total_pages, max_pages)
 
     for page in range(2, total_pages + 1):
-        page_html = fetch_page_html(
+        _, page_rows = fetch_and_parse_page_rows(
             session=session,
-            tru_code=tru.code,
+            tru=tru,
             page=page,
             year=year,
             status=status,
             amount_from=amount_from,
         )
-        rows.extend(parse_lot_rows_from_html(page_html, tru))
+        rows.extend(page_rows)
     return rows
 
 
@@ -283,6 +343,17 @@ def main() -> int:
         help="Only process first N TRU codes (0 = all).",
     )
     parser.add_argument(
+        "--only-code",
+        action="append",
+        default=[],
+        help="Process only specific TRU code(s). Can be repeated.",
+    )
+    parser.add_argument(
+        "--only-name",
+        default="",
+        help="Product name to use with --only-code (optional).",
+    )
+    parser.add_argument(
         "--max-pages-per-code",
         type=int,
         default=0,
@@ -302,6 +373,14 @@ def main() -> int:
     )
 
     tru_codes = fetch_tru_codes(session, args.source_sheet_id)
+    if args.only_code:
+        explicit_name = normalize_ws(args.only_name)
+        code_to_name = {item.code: item.name for item in tru_codes}
+        selected_codes = [normalize_ws(code) for code in args.only_code if normalize_ws(code)]
+        tru_codes = [
+            TruCode(code=code, name=explicit_name or code_to_name.get(code, ""))
+            for code in selected_codes
+        ]
     if args.limit_codes and args.limit_codes > 0:
         tru_codes = tru_codes[: args.limit_codes]
     if not tru_codes:
