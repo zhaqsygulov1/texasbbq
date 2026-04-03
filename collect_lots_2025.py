@@ -89,6 +89,20 @@ def source_sheet_csv_url(sheet_id: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"
 
 
+def create_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            )
+        }
+    )
+    return session
+
+
 def fetch_tru_codes(session: requests.Session, sheet_id: str) -> List[TruCode]:
     resp = session.get(source_sheet_csv_url(sheet_id), timeout=40)
     resp.raise_for_status()
@@ -243,7 +257,10 @@ def fetch_and_parse_page_rows(
         amount_from=amount_from,
     )
     rows = parse_lot_rows_from_html(html, tru)
+    total_records = parse_total_records(html)
     if rows:
+        return html, rows
+    if total_records == 0:
         return html, rows
 
     for attempt in range(1, retries_on_empty + 1):
@@ -269,6 +286,7 @@ def fetch_all_lots_for_tru(
     status: str,
     amount_from: str,
     max_pages: int | None = None,
+    retries_on_empty: int = 3,
 ) -> List[LotRow]:
     html, rows = fetch_and_parse_page_rows(
         session=session,
@@ -277,6 +295,7 @@ def fetch_all_lots_for_tru(
         year=year,
         status=status,
         amount_from=amount_from,
+        retries_on_empty=retries_on_empty,
     )
     total_records = parse_total_records(html)
     if total_records <= COUNT_PER_PAGE:
@@ -294,9 +313,34 @@ def fetch_all_lots_for_tru(
             year=year,
             status=status,
             amount_from=amount_from,
+            retries_on_empty=retries_on_empty,
         )
         rows.extend(page_rows)
     return rows
+
+
+def collect_lots_for_tru(
+    tru: TruCode,
+    year: str,
+    status: str,
+    amount_from: str,
+    max_pages: int | None,
+    retries_on_empty: int,
+) -> List[LotRow]:
+    # requests.Session is not thread-safe; keep one session per worker task.
+    session = create_session()
+    try:
+        return fetch_all_lots_for_tru(
+            session=session,
+            tru=tru,
+            year=year,
+            status=status,
+            amount_from=amount_from,
+            max_pages=max_pages,
+            retries_on_empty=retries_on_empty,
+        )
+    finally:
+        session.close()
 
 
 def write_csv(path: str, rows: Iterable[LotRow]) -> None:
@@ -359,20 +403,18 @@ def main() -> int:
         default=0,
         help="Limit pages per code (0 = no limit).",
     )
+    parser.add_argument(
+        "--retries-on-empty",
+        type=int,
+        default=2,
+        help="Extra retries only when page expected to have data.",
+    )
     args = parser.parse_args()
 
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
-            )
-        }
-    )
+    session = create_session()
 
     tru_codes = fetch_tru_codes(session, args.source_sheet_id)
+    session.close()
     if args.only_code:
         explicit_name = normalize_ws(args.only_name)
         code_to_name = {item.code: item.name for item in tru_codes}
@@ -396,13 +438,13 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         future_map = {
             pool.submit(
-                fetch_all_lots_for_tru,
-                session,
+                collect_lots_for_tru,
                 tru,
                 args.year,
                 args.status,
                 args.amount_from,
                 max_pages,
+                max(0, args.retries_on_empty),
             ): tru
             for tru in tru_codes
         }
