@@ -15,6 +15,7 @@ import argparse
 import csv
 import io
 import math
+import random
 import re
 import sys
 import time
@@ -171,7 +172,7 @@ def fetch_page_html(
         except requests.RequestException:
             if attempt == retries:
                 raise
-            time.sleep(1.5 * attempt)
+            time.sleep(1.2 * attempt + random.uniform(0.3, 1.0))
     return ""
 
 
@@ -275,7 +276,7 @@ def fetch_and_parse_page_rows(
         return html, rows
 
     for attempt in range(1, retries_on_empty + 1):
-        time.sleep(0.7 * attempt)
+        time.sleep(1.0 * attempt + random.uniform(0.2, 1.0))
         html = fetch_page_html(
             session=session,
             tru_code=tru.code,
@@ -320,6 +321,7 @@ def fetch_all_lots_for_tru(
         total_pages = min(total_pages, max_pages)
 
     for page in range(2, total_pages + 1):
+        time.sleep(0.15)
         _, page_rows = fetch_and_parse_page_rows(
             session=session,
             tru=tru,
@@ -394,7 +396,7 @@ def main() -> int:
     parser.add_argument(
         "--workers",
         type=int,
-        default=6,
+        default=4,
         help="Parallel workers by TRU code.",
     )
     parser.add_argument(
@@ -429,7 +431,7 @@ def main() -> int:
     parser.add_argument(
         "--retries-on-empty",
         type=int,
-        default=2,
+        default=5,
         help="Extra retries only when page expected to have data.",
     )
     args = parser.parse_args()
