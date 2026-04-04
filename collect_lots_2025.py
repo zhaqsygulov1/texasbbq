@@ -204,6 +204,7 @@ def fetch_page_html(
     year: int,
     status: int,
     amount_from: int,
+    count_record: int,
     timeout: int,
 ) -> str:
     params = {
@@ -211,7 +212,7 @@ def fetch_page_html(
         "filter[status][0]": str(status),
         "filter[amount_from]": str(amount_from),
         "filter[year]": str(year),
-        "count_record": "50",
+        "count_record": str(count_record),
         "page": str(page),
         "smb": "",
     }
@@ -259,6 +260,7 @@ def main() -> int:
     parser.add_argument("--year", type=int, default=2025)
     parser.add_argument("--status", type=int, default=360)
     parser.add_argument("--amount-from", type=int, default=15000000)
+    parser.add_argument("--count-record", type=int, default=200)
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument("--output-csv", default="out/lots_2025_by_tru.csv")
     parser.add_argument("--checkpoint", default="out/lots_2025_checkpoint.json")
@@ -298,6 +300,7 @@ def main() -> int:
                     year=args.year,
                     status=args.status,
                     amount_from=args.amount_from,
+                    count_record=args.count_record,
                     timeout=args.timeout,
                 )
                 soup = BeautifulSoup(first_html, "html5lib")
@@ -312,6 +315,7 @@ def main() -> int:
                         year=args.year,
                         status=args.status,
                         amount_from=args.amount_from,
+                        count_record=args.count_record,
                         timeout=args.timeout,
                     )
                     page_soup = BeautifulSoup(html, "html5lib")
