@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+lots_2025_by_tru.csv
+lots_2025_by_tru.csv.gz
+lots_2025_progress.txt
