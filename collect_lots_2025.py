@@ -197,6 +197,22 @@ def parse_lot_rows(
     return rows
 
 
+def lot_numbers(rows: Sequence[Dict[str, str]]) -> List[str]:
+    return [normalize_text(row.get("№ лота", "")) for row in rows if normalize_text(row.get("№ лота", ""))]
+
+
+def looks_like_unfiltered_fallback(
+    code_rows: Sequence[Dict[str, str]], baseline_lot_numbers: Sequence[str], min_compare: int = 5
+) -> bool:
+    code_lots = lot_numbers(code_rows)
+    if not code_lots or not baseline_lot_numbers:
+        return False
+    compare_len = min(len(code_lots), len(baseline_lot_numbers))
+    if compare_len < min_compare:
+        return False
+    return code_lots[:compare_len] == list(baseline_lot_numbers)[:compare_len]
+
+
 def fetch_page_html(
     session: requests.Session,
     code: str,
@@ -284,6 +300,27 @@ def main() -> int:
     processed_now = 0
     added_rows = 0
     errors = 0
+    skipped_fallback_codes = 0
+
+    # Базовая выдача без кода ЕНС ТРУ нужна, чтобы отлавливать
+    # "тихий" fallback портала (когда код игнорируется и приходит общий список).
+    baseline_html = fetch_page_html(
+        session=session,
+        code="",
+        page=1,
+        year=args.year,
+        status=args.status,
+        amount_from=args.amount_from,
+        timeout=args.timeout,
+        count_record=args.count_record,
+    )
+    baseline_soup = BeautifulSoup(baseline_html, "html5lib")
+    baseline_rows = parse_lot_rows(
+        baseline_soup,
+        code="__BASELINE__",
+        product_name="__BASELINE__",
+    )
+    baseline_lot_numbers = lot_numbers(baseline_rows)
 
     try:
         for code, product_name in iter_codes(source_codes, args.max_codes):
@@ -306,6 +343,17 @@ def main() -> int:
                 soup = BeautifulSoup(first_html, "html5lib")
                 max_page = parse_max_page(soup)
                 rows = parse_lot_rows(soup, code=code, product_name=product_name)
+
+                if looks_like_unfiltered_fallback(rows, baseline_lot_numbers):
+                    processed_codes.add(code)
+                    save_checkpoint(checkpoint_path, sorted(processed_codes))
+                    processed_now += 1
+                    skipped_fallback_codes += 1
+                    print(
+                        "  -> код пропущен: портал вернул общую выдачу "
+                        "(фильтр ЕНС ТРУ не применился)"
+                    )
+                    continue
 
                 for page in range(2, max_page + 1):
                     html = fetch_page_html(
@@ -353,6 +401,7 @@ def main() -> int:
     print(f"Всего кодов в очереди: {total_codes}")
     print(f"Обработано в этом запуске: {processed_now}")
     print(f"Добавлено строк: {added_rows}")
+    print(f"Пропущено кодов (непримененный фильтр ЕНС ТРУ): {skipped_fallback_codes}")
     print(f"Ошибок: {errors}")
     print(f"CSV: {output_csv}")
     print(f"Checkpoint: {checkpoint_path}")
