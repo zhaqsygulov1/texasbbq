@@ -46,9 +46,18 @@ function toCsvLine(values) {
 
 function getArgValue(name, fallback) {
   const prefix = `--${name}=`;
-  const hit = process.argv.find((arg) => arg.startsWith(prefix));
-  if (!hit) return fallback;
-  return hit.slice(prefix.length);
+  for (let i = 0; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    if (arg === `--${name}`) {
+      const next = process.argv[i + 1];
+      if (!next || next.startsWith('--')) return fallback;
+      return next;
+    }
+    if (arg.startsWith(prefix)) {
+      return arg.slice(prefix.length);
+    }
+  }
+  return fallback;
 }
 
 function buildSearchUrl({ code, year, countRecord, page }) {
@@ -110,11 +119,27 @@ function parseSourceRows(csvText) {
 
 function parsePageInfo($) {
   const infoText = normalizeText($('.dataTables_info strong').first().text());
-  const match = infoText.match(/из\s*([\d\s]+)\s*записей/i);
+  const match = infoText.match(/Показано\s*c\s*([\d\s]+)\s*по\s*([\d\s]+)\s*из\s*([\d\s]+)\s*записей/i);
   if (!match) return null;
-  const total = Number(match[1].replace(/\s+/g, ''));
-  if (!Number.isFinite(total)) return null;
-  return total;
+  const from = Number(match[1].replace(/\s+/g, ''));
+  const to = Number(match[2].replace(/\s+/g, ''));
+  const total = Number(match[3].replace(/\s+/g, ''));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || !Number.isFinite(total)) return null;
+  return { from, to, total };
+}
+
+function parseMaxPage($) {
+  let maxPage = 1;
+  $('ul.pagination a[href*="page="]').each((_, a) => {
+    const href = String($(a).attr('href') || '');
+    const match = href.match(/[?&]page=(\d+)/);
+    if (!match) return;
+    const page = Number(match[1]);
+    if (Number.isFinite(page) && page > maxPage) {
+      maxPage = page;
+    }
+  });
+  return maxPage;
 }
 
 function parseLotRows($) {
@@ -159,9 +184,13 @@ async function collectByCode({ code, productName, year, countRecord }) {
     const $ = load(html);
 
     if (firstPage) {
-      const parsedTotal = parsePageInfo($);
-      totalRecords = parsedTotal ?? 0;
-      totalPages = Math.max(1, Math.ceil(totalRecords / countRecord));
+      const pageInfo = parsePageInfo($);
+      totalRecords = pageInfo?.total ?? 0;
+      const inferredPageSize =
+        pageInfo && pageInfo.to >= pageInfo.from ? pageInfo.to - pageInfo.from + 1 : countRecord;
+      const pagedBySize = inferredPageSize > 0 ? Math.ceil(totalRecords / inferredPageSize) : 1;
+      const pagedByNav = parseMaxPage($);
+      totalPages = Math.max(1, pagedBySize, pagedByNav);
       firstPage = false;
     }
 
@@ -198,8 +227,14 @@ async function main() {
   const countRecord = Number(getArgValue('count-record', '2000'));
   const concurrency = Number(getArgValue('concurrency', '4'));
   const limitCodesArg = getArgValue('limit-codes', '');
-  const outputPath = getArgValue('output', path.join(process.cwd(), `lots_${year}.csv`));
-  const summaryPath = getArgValue('summary', path.join(process.cwd(), `lots_${year}_summary.json`));
+  const outputPath = getArgValue(
+    'output',
+    getArgValue('out', path.join(process.cwd(), `lots_${year}.csv`)),
+  );
+  const summaryPath = getArgValue(
+    'summary',
+    getArgValue('summary-path', path.join(process.cwd(), `lots_${year}_summary.json`)),
+  );
 
   if (!Number.isFinite(year) || !Number.isFinite(countRecord) || !Number.isFinite(concurrency)) {
     throw new Error('year/count-record/concurrency must be numeric');
