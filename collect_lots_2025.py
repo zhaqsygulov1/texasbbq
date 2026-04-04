@@ -440,6 +440,32 @@ def write_csv(path: str, rows: Iterable[LotRow]) -> None:
             writer.writerow(row.as_csv_row())
 
 
+def load_existing_csv(path: str) -> List[LotRow]:
+    existing: List[LotRow] = []
+    with open(path, "r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if not header:
+            return existing
+        for row in reader:
+            if len(row) < 9:
+                continue
+            existing.append(
+                LotRow(
+                    lot_number=row[0],
+                    tru_code=row[1],
+                    product_name=row[2],
+                    announcement_name=row[3],
+                    lot_name_description=row[4],
+                    quantity=row[5],
+                    amount_kzt=row[6],
+                    procurement_method=row[7],
+                    status=row[8],
+                )
+            )
+    return existing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collect lots by TRU codes for 2025.")
     parser.add_argument(
@@ -529,6 +555,23 @@ def main() -> int:
         default=25,
         help="Rewrite output CSV every N processed codes (0 = only at end).",
     )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Start processing TRU codes from this 0-based index.",
+    )
+    parser.add_argument(
+        "--end-index",
+        type=int,
+        default=0,
+        help="Stop before this 0-based index (0 = process to end).",
+    )
+    parser.add_argument(
+        "--load-existing-csv",
+        default="",
+        help="Load previously collected CSV and continue from there.",
+    )
     args = parser.parse_args()
 
     session = create_session()
@@ -545,6 +588,11 @@ def main() -> int:
         ]
     if args.limit_codes and args.limit_codes > 0:
         tru_codes = tru_codes[: args.limit_codes]
+    start_index = max(0, args.start_index)
+    end_index = args.end_index if args.end_index > 0 else len(tru_codes)
+    end_index = min(len(tru_codes), end_index)
+    if start_index > 0 or end_index < len(tru_codes):
+        tru_codes = tru_codes[start_index:end_index]
     if not tru_codes:
         print("No TRU codes found.", file=sys.stderr)
         return 1
@@ -552,6 +600,26 @@ def main() -> int:
     max_pages = args.max_pages_per_code if args.max_pages_per_code > 0 else None
     all_rows: List[LotRow] = []
     seen_keys = set()
+
+    if args.load_existing_csv:
+        try:
+            existing_rows = load_existing_csv(args.load_existing_csv)
+            for row in existing_rows:
+                key = (row.lot_number, row.tru_code)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                all_rows.append(row)
+            print(
+                f"Loaded existing rows: {len(existing_rows)} "
+                f"(deduped total: {len(all_rows)})",
+                flush=True,
+            )
+        except FileNotFoundError:
+            print(
+                f"[WARN] Existing CSV not found: {args.load_existing_csv}",
+                flush=True,
+            )
 
     start = time.time()
     print(f"Processing TRU codes: {len(tru_codes)}", flush=True)
