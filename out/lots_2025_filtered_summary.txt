@@ -5,4 +5,4 @@
 Обработано кодов ТРУ: 3435
 Итоговых строк: 1753
 Файл: lots_2025_by_tru_filtered.csv.gz
-SHA256: 8cfa1ee2ae7b70a2a05f9e4403223031645b19b04d6470d0c2cf781d38da3c44
+SHA256: 5b436b6e48f48c3974bcbd884be248f3b868324a3457caff1bd8e5f91dbb469c
