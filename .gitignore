@@ -1,0 +1,8 @@
+node_modules/
+
+# Generated datasets and logs
+*.csv
+*.tsv
+*.log
+lots_2025_report.json
+lots_2025_final_report.json
